@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import type { ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { visualShadows } from "../constants/visual-style";
+import { BrandMark } from "./BrandMark";
 
 export type LegalSection = {
   title: string;
@@ -29,7 +30,7 @@ export function LegalDocumentScreen({
             <Pressable accessibilityRole="button" onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
               <Text style={styles.backButtonText}>← Voltar</Text>
             </Pressable>
-            <View style={styles.brand}><View style={styles.brandIcon}><Text style={styles.brandIconText}>SC</Text></View><Text style={styles.brandName}>SeuChico</Text></View>
+            <View style={styles.brand}><BrandMark size={39} /><Text style={styles.brandName}>SeuChico</Text></View>
           </View>
 
           <View style={styles.hero}>
@@ -71,8 +72,6 @@ const styles = StyleSheet.create({
   backButton: { paddingVertical: 10, paddingRight: 12 },
   backButtonText: { color: "#087E83", fontSize: 12, fontWeight: "900" },
   brand: { flexDirection: "row", alignItems: "center", gap: 9 },
-  brandIcon: { width: 39, height: 39, borderRadius: 13, alignItems: "center", justifyContent: "center", backgroundColor: "#071D2D" },
-  brandIconText: { color: "#38D6D2", fontSize: 12, fontWeight: "900" },
   brandName: { color: "#102A43", fontSize: 17, fontWeight: "900" },
   hero: { ...visualShadows.hero, borderRadius: 28, backgroundColor: "#071D2D", padding: Platform.OS === "web" ? 38 : 25 },
   eyebrow: { color: "#38D6D2", fontSize: 9, fontWeight: "900", letterSpacing: 1.5 },
