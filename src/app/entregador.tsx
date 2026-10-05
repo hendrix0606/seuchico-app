@@ -33,7 +33,7 @@ import type {
 } from "../types/delivery";
 
 const ORDER_SELECT =
-  "id, order_number, user_id, assigned_courier_id, status, payment_status, quantity, total_cents, delivery_recipient, delivery_phone, delivery_zip_code, delivery_street, delivery_number, delivery_complement, delivery_neighborhood, delivery_city, delivery_state, delivery_reference, updated_at, ticket_drafts(event_name, event_date, event_time, location, primary_color, accent_color, ticket_templates(name))";
+  "id, order_number, user_id, assigned_courier_id, status, payment_status, payment_provider, quantity, total_cents, delivery_recipient, delivery_phone, delivery_zip_code, delivery_street, delivery_number, delivery_complement, delivery_neighborhood, delivery_city, delivery_state, delivery_reference, updated_at, ticket_drafts(event_name, event_date, event_time, location, primary_color, accent_color, ticket_templates(name))";
 
 export default function CourierScreen() {
   const router = useRouter();
@@ -77,6 +77,25 @@ export default function CourierScreen() {
       );
     } else {
       const nextOrders = (data ?? []) as unknown as DeliveryOrder[];
+
+      // O troco fica em consulta separada: antes do SQL 017 a coluna nao existe
+      // e uma falha aqui nao pode derrubar a lista de entregas.
+      const cashOrderIds = nextOrders
+        .filter((order) => order.payment_provider === "cash")
+        .map((order) => order.id);
+
+      if (cashOrderIds.length > 0) {
+        const { data: cashRows } = await supabase
+          .from("orders")
+          .select("id, cash_change_for_cents")
+          .in("id", cashOrderIds);
+
+        for (const row of cashRows ?? []) {
+          const target = nextOrders.find((order) => order.id === row.id);
+          if (target) target.cash_change_for_cents = row.cash_change_for_cents;
+        }
+      }
+
       setOrders(nextOrders);
       setSelectedOrderId((current) =>
         nextOrders.some((order) => order.id === current)
@@ -233,7 +252,11 @@ export default function CourierScreen() {
     } else {
       stopTracking();
       setShowDeliveryConfirmation(false);
-      setMessage("Entrega confirmada com sucesso.");
+      setMessage(
+        isCashToCollect(selectedOrder)
+          ? "Entrega confirmada e pagamento em dinheiro registrado."
+          : "Entrega confirmada com sucesso.",
+      );
       await notifyOrderEvent(selectedOrder.id, "order_status");
       await loadOrders({ silent: true });
     }
@@ -466,19 +489,40 @@ export default function CourierScreen() {
                 </Text>
               </Pressable>
 
+              {isCashToCollect(selectedOrder) ? (
+                <View style={styles.cashCard}>
+                  <Text style={styles.cashCardTitle}>
+                    Receber {formatCurrency(selectedOrder.total_cents)} em dinheiro
+                  </Text>
+                  <Text style={styles.cashCardText}>
+                    {cashChangeInstruction(selectedOrder)}
+                  </Text>
+                </View>
+              ) : null}
+
               {!showDeliveryConfirmation ? (
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setShowDeliveryConfirmation(true)}
                   style={({ pressed }) => [styles.deliveryButton, pressed && styles.pressed]}
                 >
-                  <Text style={styles.deliveryButtonText}>Confirmar que o pedido foi entregue</Text>
+                  <Text style={styles.deliveryButtonText}>
+                    {isCashToCollect(selectedOrder)
+                      ? "Confirmar entrega e recebimento"
+                      : "Confirmar que o pedido foi entregue"}
+                  </Text>
                 </Pressable>
               ) : (
                 <View style={styles.confirmCard}>
-                  <Text style={styles.confirmTitle}>O cliente já recebeu o pedido?</Text>
+                  <Text style={styles.confirmTitle}>
+                    {isCashToCollect(selectedOrder)
+                      ? `Você recebeu ${formatCurrency(selectedOrder.total_cents)} em dinheiro e entregou o pedido?`
+                      : "O cliente já recebeu o pedido?"}
+                  </Text>
                   <Text style={styles.confirmText}>
-                    Esta ação encerra a entrega e fica registrada no histórico.
+                    {isCashToCollect(selectedOrder)
+                      ? "Ao confirmar, o pagamento em dinheiro é registrado em seu nome e a entrega é encerrada. Esta ação fica no histórico."
+                      : "Esta ação encerra a entrega e fica registrada no histórico."}
                   </Text>
                   <View style={styles.confirmActions}>
                     <Pressable
@@ -500,7 +544,11 @@ export default function CourierScreen() {
                       ]}
                     >
                       <Text style={styles.confirmButtonText}>
-                        {isConfirming ? "Confirmando..." : "Sim, foi entregue"}
+                        {isConfirming
+                          ? "Confirmando..."
+                          : isCashToCollect(selectedOrder)
+                            ? "Sim, recebi e entreguei"
+                            : "Sim, foi entregue"}
                       </Text>
                     </Pressable>
                   </View>
@@ -573,7 +621,25 @@ function normalizeAccuracy(value: number | null) {
     : null;
 }
 
+function isCashToCollect(order: DeliveryOrder) {
+  return order.payment_provider === "cash" && order.payment_status === "on_delivery";
+}
+
+function cashChangeInstruction(order: DeliveryOrder) {
+  if (!order.cash_change_for_cents) {
+    return "O cliente não pediu troco. Confirme o valor antes de entregar os ingressos.";
+  }
+
+  const change = order.cash_change_for_cents - order.total_cents;
+  return change > 0
+    ? `O cliente vai pagar com ${formatCurrency(order.cash_change_for_cents)}. Leve ${formatCurrency(change)} de troco.`
+    : "O cliente vai pagar o valor exato, sem troco.";
+}
+
 const styles = StyleSheet.create({
+  cashCard: { borderRadius: 16, borderWidth: 1, borderColor: "#F0D79C", backgroundColor: "#FFF8E6", padding: 16 },
+  cashCardTitle: { color: "#77530D", fontSize: 15, fontWeight: "900" },
+  cashCardText: { color: "#8A6848", fontSize: 11, lineHeight: 18, marginTop: 6 },
   content: { gap: 16, marginTop: 22 },
   successCard: { borderRadius: 15, borderWidth: 1, borderColor: "#A9E1D0", backgroundColor: "#ECFBF5", padding: 14, marginTop: 18 },
   successText: { color: "#176A50", fontSize: 11, lineHeight: 17, fontWeight: "800" },

@@ -13,6 +13,7 @@ import {
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { visualShadows } from "../constants/visual-style";
 import { useAppearance } from "../context/appearance-context";
+import { formatMoneyInput, parseMoneyInput } from "../lib/finance";
 import { pickBrandImage, safeFileName, uploadDocument } from "../lib/file-upload";
 import { supabase } from "../lib/supabase";
 import { DEFAULT_APPEARANCE, type AppAppearance } from "../types/appearance";
@@ -53,6 +54,11 @@ export default function SettingsScreen() {
   const [copyPaste, setCopyPaste] = useState("");
   const [pixInstructions, setPixInstructions] = useState("");
 
+  const [isCashAvailable, setIsCashAvailable] = useState(true);
+  const [isSavingCash, setIsSavingCash] = useState(false);
+  const [cashEnabled, setCashEnabled] = useState(false);
+  const [cashMax, setCashMax] = useState("300,00");
+
   const [brandName, setBrandName] = useState(appearance.brand_name);
   const [tagline, setTagline] = useState(appearance.tagline);
   const [primaryColor, setPrimaryColor] = useState(appearance.primary_color);
@@ -81,7 +87,52 @@ export default function SettingsScreen() {
       fillAppearanceForm(appearanceResult.data as AppAppearance);
     }
 
+    // Consulta separada: antes do SQL 017 ela falha e so esconde este cartao.
+    const cashResult = await supabase
+      .from("cash_settings")
+      .select("is_enabled, max_order_cents")
+      .eq("id", 1)
+      .single();
+
+    if (cashResult.error || !cashResult.data) {
+      setIsCashAvailable(false);
+    } else {
+      setIsCashAvailable(true);
+      setCashEnabled(cashResult.data.is_enabled);
+      setCashMax(formatMoneyInput(cashResult.data.max_order_cents));
+    }
+
     setIsLoading(false);
+  };
+
+  const handleSaveCash = async () => {
+    setFeedback(null);
+    const maxCents = parseMoneyInput(cashMax);
+
+    if (maxCents === null || maxCents < 100 || maxCents > 10_000_000) {
+      setFeedback({
+        tone: "error",
+        text: "Informe um valor máximo entre R$ 1,00 e R$ 100.000,00.",
+      });
+      return;
+    }
+
+    setIsSavingCash(true);
+    const { data, error } = await supabase
+      .from("cash_settings")
+      .update({ is_enabled: cashEnabled, max_order_cents: maxCents })
+      .eq("id", 1)
+      .select("is_enabled, max_order_cents")
+      .single();
+
+    if (error || !data) {
+      setFeedback({ tone: "error", text: "Não foi possível salvar a configuração de dinheiro." });
+    } else {
+      setCashEnabled(data.is_enabled);
+      setCashMax(formatMoneyInput(data.max_order_cents));
+      setFeedback({ tone: "success", text: "Configuração de dinheiro na entrega salva." });
+    }
+    setIsSavingCash(false);
   };
 
   useEffect(() => {
@@ -316,6 +367,47 @@ export default function SettingsScreen() {
             </Pressable>
           </View>
 
+          {isCashAvailable ? (
+            <View style={styles.card}>
+              <Text style={styles.eyebrow}>DINHEIRO NA ENTREGA</Text>
+              <Text style={styles.title}>Pagamento ao entregador</Text>
+              <Text style={styles.helpText}>
+                O cliente escolhe pagar em dinheiro, você aceita o pedido e o entregador confirma o recebimento na entrega. Só então o valor entra na receita.
+              </Text>
+
+              <Pressable
+                accessibilityRole="switch"
+                accessibilityState={{ checked: cashEnabled }}
+                onPress={() => setCashEnabled((current) => !current)}
+                style={[styles.switchRow, cashEnabled && styles.switchRowActive]}
+              >
+                <View style={[styles.switchTrack, cashEnabled && styles.switchTrackActive]}>
+                  <View style={[styles.switchKnob, cashEnabled && styles.switchKnobActive]} />
+                </View>
+                <View style={styles.flex}>
+                  <Text style={styles.switchTitle}>{cashEnabled ? "Dinheiro ativado" : "Dinheiro desativado"}</Text>
+                  <Text style={styles.switchDescription}>Exibir esta forma de pagamento aos clientes.</Text>
+                </View>
+              </Pressable>
+
+              <FormField
+                keyboardType="decimal-pad"
+                label="Valor máximo por pedido (R$)"
+                onChangeText={setCashMax}
+                placeholder="300,00"
+                value={cashMax}
+              />
+
+              <Pressable
+                disabled={isSavingCash}
+                onPress={() => void handleSaveCash()}
+                style={[styles.primaryButton, isSavingCash && styles.disabled]}
+              >
+                <Text style={styles.primaryButtonText}>{isSavingCash ? "Salvando..." : "Salvar dinheiro na entrega"}</Text>
+              </Pressable>
+            </View>
+          ) : null}
+
           <View style={styles.card}>
             <Text style={styles.eyebrow}>IDENTIDADE VISUAL</Text>
             <Text style={styles.title}>Cores, logo e imagem principal</Text>
@@ -408,6 +500,7 @@ function FormField({
   ...props
 }: {
   autoCapitalize?: "none" | "sentences" | "words" | "characters";
+  keyboardType?: "default" | "decimal-pad";
   label: string;
   multiline?: boolean;
   onChangeText: (value: string) => void;

@@ -45,7 +45,7 @@ export type FinancialOrder = {
   id: string;
   order_number: number;
   user_id: string;
-  payment_provider: "stripe" | "pix";
+  payment_provider: "stripe" | "pix" | "cash";
   status:
     | "awaiting_payment"
     | "paid"
@@ -61,7 +61,8 @@ export type FinancialOrder = {
     | "paid"
     | "failed"
     | "cancelled"
-    | "refunded";
+    | "refunded"
+    | "on_delivery";
   quantity: number;
   total_cents: number;
   delivery_city: string;
