@@ -1,0 +1,14 @@
+[functions.compute-delivery-route]
+verify_jwt = true
+
+[functions.send-push-notification]
+verify_jwt = true
+
+[functions.admin-manage-user]
+verify_jwt = true
+
+[functions.create-stripe-checkout]
+verify_jwt = true
+
+[functions.stripe-webhook]
+verify_jwt = false

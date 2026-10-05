@@ -1,0 +1,46 @@
+SEUCHICO - ETAPA 3 - AUTENTICACAO REAL E BANCO SEGURO
+
+ANTES DE INSTALAR
+
+1. Confirme que o arquivo .env existe na raiz do projeto e possui:
+   EXPO_PUBLIC_SUPABASE_URL
+   EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY
+
+2. Confirme que as dependencias foram instaladas:
+   npx.cmd expo install @supabase/supabase-js @react-native-async-storage/async-storage
+
+BANCO DE DADOS
+
+1. Abra o Supabase.
+2. Entre em SQL Editor.
+3. Clique em New query.
+4. Abra o arquivo supabase/001_auth_profiles_secure.sql deste pacote.
+5. Copie todo o conteudo para o SQL Editor.
+6. Clique em Run.
+7. O resultado deve indicar sucesso.
+
+INSTALACAO DOS ARQUIVOS DO APP
+
+Extraia este pacote dentro de:
+C:\Projetos\seuchico-app
+
+Confirme a substituicao dos arquivos existentes.
+
+Depois, encerre o Expo com Ctrl+C e execute novamente:
+npm.cmd run web
+
+TESTE
+
+1. Abra Criar minha conta.
+2. Use um e-mail de teste valido.
+3. Confirme o e-mail recebido, se solicitado.
+4. Volte para Entrar e use a conta criada.
+
+SEGURANCA
+
+- Cadastros publicos sempre recebem o papel client.
+- A chave secreta nao e usada no aplicativo.
+- A tabela profiles possui Row Level Security.
+- Cada cliente acessa apenas seu proprio perfil.
+- Administradores podem consultar perfis, mas a promocao de papeis sera feita
+  por operacao administrativa segura em uma etapa posterior.
