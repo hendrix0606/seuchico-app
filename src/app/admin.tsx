@@ -10,8 +10,16 @@ import {
   View,
 } from "react-native";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
+import { StarRating } from "../components/StarRating";
 import { visualShadows } from "../constants/visual-style";
 import { notifyOrderEvent } from "../lib/push-notifications";
+import {
+  fetchRatingSummary,
+  fetchRecentComments,
+  formatAverage,
+  type CourierRatingSummary,
+  type RecentRating,
+} from "../lib/ratings";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
 import { supabase } from "../lib/supabase";
 
@@ -105,6 +113,8 @@ export default function AdminScreen() {
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [ratingSummary, setRatingSummary] = useState<CourierRatingSummary[] | null>(null);
+  const [recentComments, setRecentComments] = useState<RecentRating[]>([]);
 
   const loadDashboard = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setIsLoading(true);
@@ -131,6 +141,15 @@ export default function AdminScreen() {
       setOrders((ordersResult.data ?? []) as unknown as AdminOrder[]);
       setProfiles((profilesResult.data ?? []) as Profile[]);
     }
+
+    // Avaliacoes ficam em consultas separadas: antes do SQL 018 elas falham e
+    // so escondem o painel, sem afetar a operacao.
+    const [summary, comments] = await Promise.all([
+      fetchRatingSummary(),
+      fetchRecentComments(5),
+    ]);
+    setRatingSummary(summary);
+    setRecentComments(comments);
 
     if (!silent) setIsLoading(false);
   };
@@ -292,6 +311,38 @@ export default function AdminScreen() {
         <SummaryCard accent="purple" label="EM ENTREGA" value={countStatus(orders, "out_for_delivery")} />
         <SummaryCard accent="green" label="RECEITA PAGA" value={formatCurrency(paidRevenue)} wide />
       </View>
+
+      {ratingSummary ? (
+        <View style={styles.ratingPanel}>
+          <Text style={styles.ratingPanelEyebrow}>AVALIAÇÃO DOS ENTREGADORES</Text>
+          {ratingSummary.length === 0 ? (
+            <Text style={styles.ratingPanelEmpty}>Nenhuma avaliação recebida ainda.</Text>
+          ) : (
+            ratingSummary.map((item) => (
+              <View key={item.courier_id ?? item.courier_name} style={styles.ratingRow}>
+                <Text numberOfLines={1} style={styles.ratingName}>{item.courier_name}</Text>
+                <StarRating size={16} value={item.rating_average} />
+                <Text style={styles.ratingValue}>
+                  {formatAverage(item.rating_average)} · {item.rating_count} {item.rating_count === 1 ? "avaliação" : "avaliações"}
+                </Text>
+              </View>
+            ))
+          )}
+          {recentComments.length > 0 ? (
+            <View style={styles.ratingComments}>
+              <Text style={styles.ratingCommentsTitle}>COMENTÁRIOS RECENTES</Text>
+              {recentComments.map((item) => (
+                <View key={item.id} style={styles.ratingCommentRow}>
+                  <StarRating size={12} value={item.rating} />
+                  <Text style={styles.ratingCommentText}>
+                    {profilesById.get(item.courier_id ?? "")?.full_name ?? "Entregador"}: “{item.comment}”
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
 
       {feedback ? (
         <View
@@ -617,6 +668,16 @@ function translateWorkflowError(message: string) {
 }
 
 const styles = StyleSheet.create({
+  ratingPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#F0E2B8", backgroundColor: "#FFFBEF", padding: 16, marginTop: 14 },
+  ratingPanelEyebrow: { color: "#8A6A12", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  ratingPanelEmpty: { color: "#8A6848", fontSize: 11 },
+  ratingRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  ratingName: { flexGrow: 1, flexBasis: 140, color: "#102A43", fontSize: 12, fontWeight: "900" },
+  ratingValue: { color: "#627D8A", fontSize: 10, fontWeight: "700" },
+  ratingComments: { gap: 8, borderTopWidth: 1, borderTopColor: "#F0E2B8", paddingTop: 10, marginTop: 4 },
+  ratingCommentsTitle: { color: "#8A6A12", fontSize: 8, fontWeight: "900", letterSpacing: 1.1 },
+  ratingCommentRow: { gap: 3 },
+  ratingCommentText: { color: "#486876", fontSize: 11, lineHeight: 17 },
   toolbar: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14, marginTop: 24 },
   toolbarActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 },
   accessButton: { minHeight: 42, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#071D2D", paddingHorizontal: 15 },

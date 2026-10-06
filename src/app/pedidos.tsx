@@ -7,12 +7,20 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
+import { StarRating } from "../components/StarRating";
 import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
 import { useOrderChatUnread } from "../hooks/use-order-chat-unread";
+import {
+  fetchMyRatings,
+  rateCourier,
+  translateRatingError,
+  type MyRating,
+} from "../lib/ratings";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
 import { supabase } from "../lib/supabase";
 
@@ -72,6 +80,10 @@ export default function OrdersScreen() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [isPayingOrderId, setIsPayingOrderId] = useState<string | null>(null);
   const [isPixEnabled, setIsPixEnabled] = useState(false);
+  const [ratings, setRatings] = useState<Record<string, MyRating>>({});
+  const [ratingDrafts, setRatingDrafts] = useState<Record<string, { stars: number; comment: string }>>({});
+  const [ratingBusyId, setRatingBusyId] = useState<string | null>(null);
+  const [ratingError, setRatingError] = useState<{ orderId: string; text: string } | null>(null);
   const unreadCounts = useOrderChatUnread(orders.map((order) => order.id));
 
   const loadOrders = async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -95,6 +107,12 @@ export default function OrdersScreen() {
     } else {
       const loadedOrders = (data ?? []) as unknown as OrderListItem[];
       setOrders(loadedOrders);
+
+      const deliveredIds = loadedOrders
+        .filter((order) => order.status === "delivered")
+        .map((order) => order.id);
+      const myRatings = await fetchMyRatings(deliveredIds);
+      setRatings(Object.fromEntries(myRatings.map((item) => [item.order_id, item])));
 
       const returnedOrder = returnedSessionId
         ? loadedOrders.find(
@@ -145,6 +163,32 @@ export default function OrdersScreen() {
     // A atualização precisa ocorrer quando o usuário retornar do Stripe.
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [paymentResult, returnedSessionId, session?.user.id]);
+
+  const handleSubmitRating = async (orderId: string) => {
+    const draft = ratingDrafts[orderId];
+    if (!draft || draft.stars < 1) {
+      setRatingError({ orderId, text: "Escolha de 1 a 5 estrelas antes de enviar." });
+      return;
+    }
+
+    setRatingBusyId(orderId);
+    setRatingError(null);
+
+    try {
+      await rateCourier(orderId, draft.stars, draft.comment);
+      setRatings((current) => ({
+        ...current,
+        [orderId]: { order_id: orderId, rating: draft.stars, comment: draft.comment.trim() || null },
+      }));
+    } catch (error) {
+      setRatingError({
+        orderId,
+        text: translateRatingError(error instanceof Error ? error.message : String(error)),
+      });
+    }
+
+    setRatingBusyId(null);
+  };
 
   const handleStartPayment = async (orderId: string) => {
     setIsPayingOrderId(orderId);
@@ -466,6 +510,68 @@ export default function OrdersScreen() {
                       </Pressable>
                     </View>
                   ) : null}
+
+                  {order.status === "delivered" && order.assigned_courier_id ? (
+                    <View style={styles.ratingBox}>
+                      {ratings[order.id] ? (
+                        <>
+                          <Text style={styles.ratingTitle}>Sua avaliação do entregador</Text>
+                          <StarRating size={22} value={ratings[order.id].rating} />
+                          {ratings[order.id].comment ? (
+                            <Text style={styles.ratingComment}>“{ratings[order.id].comment}”</Text>
+                          ) : null}
+                        </>
+                      ) : (
+                        <>
+                          <Text style={styles.ratingTitle}>Como foi a entrega?</Text>
+                          <Text style={styles.ratingHint}>Avalie o entregador. Você pode avaliar uma única vez.</Text>
+                          <StarRating
+                            onChange={(stars) =>
+                              setRatingDrafts((current) => ({
+                                ...current,
+                                [order.id]: { stars, comment: current[order.id]?.comment ?? "" },
+                              }))
+                            }
+                            size={30}
+                            value={ratingDrafts[order.id]?.stars ?? 0}
+                          />
+                          <TextInput
+                            accessibilityLabel="Comentário sobre o entregador"
+                            maxLength={500}
+                            multiline
+                            onChangeText={(comment) =>
+                              setRatingDrafts((current) => ({
+                                ...current,
+                                [order.id]: { stars: current[order.id]?.stars ?? 0, comment },
+                              }))
+                            }
+                            placeholder="Comentário (opcional)"
+                            placeholderTextColor="#91A4AD"
+                            style={styles.ratingInput}
+                            value={ratingDrafts[order.id]?.comment ?? ""}
+                          />
+                          {ratingError?.orderId === order.id ? (
+                            <Text style={styles.ratingError}>{ratingError.text}</Text>
+                          ) : null}
+                          <Pressable
+                            accessibilityRole="button"
+                            disabled={ratingBusyId !== null}
+                            onPress={() => void handleSubmitRating(order.id)}
+                            style={({ pressed }) => [
+                              styles.ratingButton,
+                              ratingBusyId !== null && styles.disabled,
+                              pressed && styles.pressed,
+                            ]}
+                          >
+                            {ratingBusyId === order.id ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
+                            <Text style={styles.ratingButtonText}>
+                              {ratingBusyId === order.id ? "Enviando..." : "Enviar avaliação"}
+                            </Text>
+                          </Pressable>
+                        </>
+                      )}
+                    </View>
+                  ) : null}
                 </View>
               </View>
             );
@@ -541,6 +647,14 @@ const styles = StyleSheet.create({
   payButtonText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   payButtonArrow: { color: "#071D2D", fontSize: 18, fontWeight: "900" },
   pixButton: { minHeight: 46, flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 13, backgroundColor: "#38D6D2", paddingHorizontal: 15 },
+  ratingBox: { gap: 10, borderRadius: 14, borderWidth: 1, borderColor: "#F0E2B8", backgroundColor: "#FFFBEF", padding: 15, marginTop: 14 },
+  ratingTitle: { color: "#102A43", fontSize: 12, fontWeight: "900" },
+  ratingHint: { color: "#627D8A", fontSize: 10 },
+  ratingComment: { color: "#486876", fontSize: 11, lineHeight: 17, fontStyle: "italic" },
+  ratingInput: { minHeight: 64, borderRadius: 12, borderWidth: 1, borderColor: "#E5D9B5", backgroundColor: "#FFFFFF", color: "#102A43", fontSize: 12, paddingHorizontal: 12, paddingVertical: 10, textAlignVertical: "top" },
+  ratingError: { color: "#8A3325", fontSize: 11, fontWeight: "800" },
+  ratingButton: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 12, backgroundColor: "#087E83", paddingHorizontal: 16 },
+  ratingButtonText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   pixButtonStandalone: { marginTop: 12 },
   pixButtonText: { color: "#071D2D", fontSize: 11, fontWeight: "900" },
   pixButtonArrow: { color: "#071D2D", fontSize: 18, fontWeight: "900" },
