@@ -10,9 +10,16 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Avatar } from "../components/Avatar";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
+import {
+  fetchOwnAvatarPath,
+  removeOwnAvatar,
+  saveOwnAvatar,
+} from "../lib/avatar";
+import { pickAvatarImage } from "../lib/file-upload";
 import { roleLabel, routeForRole } from "../lib/role-routes";
 import { supabase } from "../lib/supabase";
 
@@ -27,6 +34,60 @@ export default function ProfileScreen() {
   const [isDeletionBusy, setIsDeletionBusy] = useState(false);
   const [hasPendingDeletion, setHasPendingDeletion] = useState(false);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [avatarPath, setAvatarPath] = useState<string | null>(null);
+  const [isAvatarAvailable, setIsAvatarAvailable] = useState(true);
+  const [isAvatarBusy, setIsAvatarBusy] = useState(false);
+  const isClient = profile?.role === "client";
+
+  useEffect(() => {
+    const userId = session?.user.id;
+    if (!userId || !isClient) return;
+
+    fetchOwnAvatarPath(userId)
+      .then((path) => setAvatarPath(path))
+      .catch(() => setIsAvatarAvailable(false));
+  }, [session?.user.id, isClient]);
+
+  const handlePickAvatar = async () => {
+    const userId = session?.user.id;
+    if (!userId || isAvatarBusy) return;
+    setFeedback(null);
+
+    let asset;
+    try {
+      asset = await pickAvatarImage();
+    } catch {
+      setFeedback({ tone: "error", text: "A foto precisa ter até 5 MB." });
+      return;
+    }
+    if (!asset) return;
+
+    setIsAvatarBusy(true);
+    try {
+      const path = await saveOwnAvatar(userId, asset, avatarPath);
+      setAvatarPath(path);
+      setFeedback({ tone: "success", text: "Foto atualizada com sucesso." });
+    } catch {
+      setFeedback({ tone: "error", text: "Não foi possível enviar a foto. Confirme o SQL da Etapa 16 e tente novamente." });
+    }
+    setIsAvatarBusy(false);
+  };
+
+  const handleRemoveAvatar = async () => {
+    const userId = session?.user.id;
+    if (!userId || !avatarPath || isAvatarBusy) return;
+    setFeedback(null);
+    setIsAvatarBusy(true);
+
+    try {
+      await removeOwnAvatar(userId, avatarPath);
+      setAvatarPath(null);
+      setFeedback({ tone: "success", text: "Foto removida." });
+    } catch {
+      setFeedback({ tone: "error", text: "Não foi possível remover a foto. Tente novamente." });
+    }
+    setIsAvatarBusy(false);
+  };
 
   useEffect(() => {
     setFullName(profile?.full_name ?? "");
@@ -135,6 +196,27 @@ export default function ProfileScreen() {
           <Text style={styles.eyebrow}>DADOS PESSOAIS</Text>
           <Text style={styles.cardTitle}>Informações da conta</Text>
 
+          {isClient && isAvatarAvailable ? (
+            <View style={styles.avatarRow}>
+              <Avatar name={fullName || profile?.full_name || "Cliente"} path={avatarPath} size={84} />
+              <View style={styles.avatarActions}>
+                <Text style={styles.label}>Sua foto</Text>
+                <Text style={styles.helperText}>Aparece para o entregador no chat da entrega. JPG, PNG ou WebP, até 5 MB.</Text>
+                <View style={styles.avatarButtons}>
+                  <Pressable accessibilityRole="button" disabled={isAvatarBusy} onPress={() => void handlePickAvatar()} style={({ pressed }) => [styles.avatarButton, isAvatarBusy && styles.disabled, pressed && styles.pressed]}>
+                    {isAvatarBusy ? <ActivityIndicator color="#071D2D" size="small" /> : null}
+                    <Text style={styles.avatarButtonText}>{avatarPath ? "Trocar foto" : "Escolher foto"}</Text>
+                  </Pressable>
+                  {avatarPath ? (
+                    <Pressable accessibilityRole="button" disabled={isAvatarBusy} onPress={() => void handleRemoveAvatar()} style={({ pressed }) => [styles.avatarRemoveButton, isAvatarBusy && styles.disabled, pressed && styles.pressed]}>
+                      <Text style={styles.avatarRemoveText}>Remover</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+              </View>
+            </View>
+          ) : null}
+
           <View style={styles.form}>
             <View style={styles.fieldGroup}>
               <Text style={styles.label}>Nome completo</Text>
@@ -221,6 +303,13 @@ const styles = StyleSheet.create({
   eyebrow: { color: "#087E83", fontSize: 8, fontWeight: "900", letterSpacing: 1.3 },
   cardTitle: { color: "#102A43", fontSize: 21, fontWeight: "900", marginTop: 7 },
   cardText: { color: "#627D8A", fontSize: 12, lineHeight: 19, marginTop: 8 },
+  avatarRow: { flexDirection: "row", alignItems: "center", gap: 16, marginTop: 18, paddingBottom: 18, borderBottomWidth: 1, borderBottomColor: "#E7EFF1" },
+  avatarActions: { flex: 1, gap: 6 },
+  avatarButtons: { flexDirection: "row", alignItems: "center", flexWrap: "wrap", gap: 8, marginTop: 4 },
+  avatarButton: { minHeight: 40, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 12, backgroundColor: "#38D6D2", paddingHorizontal: 14 },
+  avatarButtonText: { color: "#071D2D", fontSize: 11, fontWeight: "900" },
+  avatarRemoveButton: { minHeight: 40, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#FFFFFF", paddingHorizontal: 14 },
+  avatarRemoveText: { color: "#486876", fontSize: 11, fontWeight: "900" },
   form: { gap: 15, marginTop: 20 },
   fieldGroup: { gap: 7 },
   label: { color: "#102A43", fontSize: 11, fontWeight: "900" },

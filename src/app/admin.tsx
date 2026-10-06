@@ -10,8 +10,23 @@ import {
   View,
 } from "react-native";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
+import { StarRating } from "../components/StarRating";
 import { visualShadows } from "../constants/visual-style";
+import {
+  fetchCashBalances,
+  registerCashSettlement,
+  translateSettlementError,
+  type CashBalance,
+} from "../lib/cash-settlement";
+import { formatMoneyInput, parseMoneyInput } from "../lib/finance";
 import { notifyOrderEvent } from "../lib/push-notifications";
+import {
+  fetchRatingSummary,
+  fetchRecentComments,
+  formatAverage,
+  type CourierRatingSummary,
+  type RecentRating,
+} from "../lib/ratings";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
 import { supabase } from "../lib/supabase";
 
@@ -31,7 +46,8 @@ type PaymentStatus =
   | "paid"
   | "failed"
   | "cancelled"
-  | "refunded";
+  | "refunded"
+  | "on_delivery";
 
 type Profile = {
   id: string;
@@ -47,7 +63,7 @@ type AdminOrder = {
   user_id: string;
   assigned_courier_id: string | null;
   status: OrderStatus;
-  payment_provider: "stripe" | "pix";
+  payment_provider: "stripe" | "pix" | "cash";
   payment_status: PaymentStatus;
   quantity: number;
   total_cents: number;
@@ -105,6 +121,13 @@ export default function AdminScreen() {
   const [busyOrderId, setBusyOrderId] = useState<string | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<Feedback>(null);
+  const [ratingSummary, setRatingSummary] = useState<CourierRatingSummary[] | null>(null);
+  const [recentComments, setRecentComments] = useState<RecentRating[]>([]);
+  const [cashBalances, setCashBalances] = useState<CashBalance[] | null>(null);
+  const [settleCourierId, setSettleCourierId] = useState<string | null>(null);
+  const [settleAmount, setSettleAmount] = useState("");
+  const [settleNote, setSettleNote] = useState("");
+  const [isSettling, setIsSettling] = useState(false);
 
   const loadDashboard = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setIsLoading(true);
@@ -132,7 +155,47 @@ export default function AdminScreen() {
       setProfiles((profilesResult.data ?? []) as Profile[]);
     }
 
+    // Avaliacoes ficam em consultas separadas: antes do SQL 018 elas falham e
+    // so escondem o painel, sem afetar a operacao.
+    const [summary, comments] = await Promise.all([
+      fetchRatingSummary(),
+      fetchRecentComments(5),
+    ]);
+    setRatingSummary(summary);
+    setRecentComments(comments);
+
+    // Saldo do dinheiro com os entregadores: antes do SQL 019 so esconde o painel.
+    setCashBalances(await fetchCashBalances());
+
     if (!silent) setIsLoading(false);
+  };
+
+  const handleRegisterSettlement = async (courierId: string) => {
+    const amountCents = parseMoneyInput(settleAmount);
+
+    if (amountCents === null || amountCents <= 0) {
+      setFeedback({ tone: "error", text: "Informe o valor do repasse, maior que zero." });
+      return;
+    }
+
+    setIsSettling(true);
+    setFeedback(null);
+
+    try {
+      await registerCashSettlement(courierId, amountCents, settleNote);
+      setSettleCourierId(null);
+      setSettleAmount("");
+      setSettleNote("");
+      setFeedback({ tone: "success", text: `Repasse de ${formatCurrency(amountCents)} registrado.` });
+      setCashBalances(await fetchCashBalances());
+    } catch (error) {
+      setFeedback({
+        tone: "error",
+        text: translateSettlementError(error instanceof Error ? error.message : String(error)),
+      });
+    }
+
+    setIsSettling(false);
   };
 
   useEffect(() => {
@@ -184,7 +247,7 @@ export default function AdminScreen() {
   };
 
   const handleTransition = async (order: AdminOrder) => {
-    const action = workflowAction(order.status);
+    const action = workflowAction(order);
     if (!action) return;
 
     if (action.nextStatus === "out_for_delivery" && !order.assigned_courier_id) {
@@ -293,6 +356,105 @@ export default function AdminScreen() {
         <SummaryCard accent="green" label="RECEITA PAGA" value={formatCurrency(paidRevenue)} wide />
       </View>
 
+      {ratingSummary ? (
+        <View style={styles.ratingPanel}>
+          <Text style={styles.ratingPanelEyebrow}>AVALIAÇÃO DOS ENTREGADORES</Text>
+          {ratingSummary.length === 0 ? (
+            <Text style={styles.ratingPanelEmpty}>Nenhuma avaliação recebida ainda.</Text>
+          ) : (
+            ratingSummary.map((item) => (
+              <View key={item.courier_id ?? item.courier_name} style={styles.ratingRow}>
+                <Text numberOfLines={1} style={styles.ratingName}>{item.courier_name}</Text>
+                <StarRating size={16} value={item.rating_average} />
+                <Text style={styles.ratingValue}>
+                  {formatAverage(item.rating_average)} · {item.rating_count} {item.rating_count === 1 ? "avaliação" : "avaliações"}
+                </Text>
+              </View>
+            ))
+          )}
+          {recentComments.length > 0 ? (
+            <View style={styles.ratingComments}>
+              <Text style={styles.ratingCommentsTitle}>COMENTÁRIOS RECENTES</Text>
+              {recentComments.map((item) => (
+                <View key={item.id} style={styles.ratingCommentRow}>
+                  <StarRating size={12} value={item.rating} />
+                  <Text style={styles.ratingCommentText}>
+                    {profilesById.get(item.courier_id ?? "")?.full_name ?? "Entregador"}: “{item.comment}”
+                  </Text>
+                </View>
+              ))}
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
+      {cashBalances && cashBalances.length > 0 ? (
+        <View style={styles.cashPanel}>
+          <Text style={styles.cashPanelEyebrow}>DINHEIRO COM ENTREGADORES</Text>
+          {cashBalances.map((item) => {
+            const isOpen = settleCourierId === item.courier_id;
+            return (
+              <View key={item.courier_id} style={styles.cashRow}>
+                <View style={styles.cashRowHeader}>
+                  <View style={styles.cashRowInfo}>
+                    <Text numberOfLines={1} style={styles.cashName}>{item.courier_name}</Text>
+                    <Text style={styles.cashDetails}>
+                      Recebido {formatCurrency(item.received_cents)} · Repassado {formatCurrency(item.settled_cents)}
+                    </Text>
+                  </View>
+                  <Text style={item.balance_cents > 0 ? styles.cashBalanceDue : styles.cashBalanceOk}>
+                    {item.balance_cents > 0 ? `A repassar ${formatCurrency(item.balance_cents)}` : "Em dia"}
+                  </Text>
+                  {item.balance_cents > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setSettleCourierId(isOpen ? null : item.courier_id);
+                        setSettleAmount(formatMoneyInput(item.balance_cents));
+                        setSettleNote("");
+                      }}
+                      style={({ pressed }) => [styles.cashSettleButton, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.cashSettleButtonText}>{isOpen ? "Fechar" : "Registrar repasse"}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {isOpen ? (
+                  <View style={styles.cashForm}>
+                    <TextInput
+                      accessibilityLabel="Valor do repasse"
+                      keyboardType="decimal-pad"
+                      onChangeText={setSettleAmount}
+                      placeholder="Valor do repasse (R$)"
+                      placeholderTextColor="#91A4AD"
+                      style={styles.cashInput}
+                      value={settleAmount}
+                    />
+                    <TextInput
+                      accessibilityLabel="Observação do repasse"
+                      maxLength={300}
+                      onChangeText={setSettleNote}
+                      placeholder="Observação (opcional)"
+                      placeholderTextColor="#91A4AD"
+                      style={styles.cashInput}
+                      value={settleNote}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isSettling}
+                      onPress={() => void handleRegisterSettlement(item.courier_id)}
+                      style={({ pressed }) => [styles.cashConfirmButton, isSettling && styles.disabled, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.cashConfirmText}>{isSettling ? "Registrando..." : "Confirmar repasse"}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
+
       {feedback ? (
         <View
           accessibilityLiveRegion="polite"
@@ -360,7 +522,8 @@ export default function AdminScreen() {
               ? profilesById.get(order.assigned_courier_id)
               : null;
             const status = statusDetails(order.status);
-            const action = workflowAction(order.status);
+            const action = workflowAction(order);
+            const isCashPending = isCashOnDelivery(order);
             const isBusy = busyOrderId === order.id;
 
             return (
@@ -415,7 +578,7 @@ export default function AdminScreen() {
                     <Info label="CLIENTE" value={client?.full_name ?? order.delivery_recipient} />
                     <Info label="TELEFONE" value={client?.phone ?? order.delivery_phone} />
                     <Info label="QUANTIDADE" value={`${order.quantity} unidades`} />
-                    <Info label="PAGAMENTO" value={order.payment_provider === "pix" ? "PIX" : "Cartão · Stripe"} />
+                    <Info label="PAGAMENTO" value={paymentLabel(order)} />
                     <Info label="ENTREGA" value={formatAddress(order)} wide />
                     <Info label="ENTREGADOR" value={courier?.full_name ?? "Ainda não atribuído"} wide />
                   </View>
@@ -500,6 +663,25 @@ export default function AdminScreen() {
                         </>
                       ) : null}
                     </View>
+                  ) : order.status === "awaiting_payment" && isCashPending ? (
+                    <View style={styles.awaitingNotice}>
+                      <Text style={styles.awaitingTitle}>Dinheiro na entrega · aguardando seu aceite</Text>
+                      <Text style={styles.awaitingText}>
+                        O cliente vai pagar {formatCurrency(order.total_cents)} em dinheiro ao entregador. Ao aceitar, a produção começa antes do recebimento. O pagamento só entra na receita quando o entregador confirmar a entrega.
+                      </Text>
+                      {action ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={isBusy}
+                          onPress={() => void handleTransition(order)}
+                          style={({ pressed }) => [styles.actionButton, isBusy && styles.disabled, pressed && styles.pressed]}
+                        >
+                          {isBusy ? <ActivityIndicator color="#071D2D" size="small" /> : null}
+                          <Text style={styles.actionButtonText}>{isBusy ? "Atualizando..." : action.label}</Text>
+                          {!isBusy ? <Text style={styles.actionArrow}>→</Text> : null}
+                        </Pressable>
+                      ) : null}
+                    </View>
                   ) : order.status === "awaiting_payment" ? (
                     <View style={styles.awaitingNotice}>
                       <Text style={styles.awaitingTitle}>Pagamento pendente</Text>
@@ -574,7 +756,26 @@ function countStatus(orders: AdminOrder[], status: OrderStatus) {
   return orders.filter((item) => item.status === status).length;
 }
 
-function workflowAction(status: OrderStatus) {
+function isCashOnDelivery(order: AdminOrder) {
+  return order.payment_provider === "cash" && order.payment_status === "on_delivery";
+}
+
+function paymentLabel(order: AdminOrder) {
+  if (order.payment_provider === "cash") {
+    if (order.payment_status === "paid") return "Dinheiro · recebido na entrega";
+    if (order.payment_status === "cancelled") return "Dinheiro · recusado pelo cliente";
+    return "Dinheiro na entrega · a receber";
+  }
+  return order.payment_provider === "pix" ? "PIX" : "Cartão · Stripe";
+}
+
+function workflowAction(order: AdminOrder) {
+  const status = order.status;
+  if (status === "awaiting_payment" && isCashOnDelivery(order)) {
+    return { label: "Aceitar pedido e iniciar produção", nextStatus: "in_production" as const };
+  }
+  // Pedido em dinheiro a receber: quem confirma entrega e recebimento e o entregador.
+  if (status === "out_for_delivery" && isCashOnDelivery(order)) return null;
   if (status === "paid") return { label: "Iniciar produção", nextStatus: "in_production" as const };
   if (status === "in_production") return { label: "Marcar como pronto para entrega", nextStatus: "ready_for_delivery" as const };
   if (status === "ready_for_delivery") return { label: "Registrar saída para entrega", nextStatus: "out_for_delivery" as const };
@@ -612,11 +813,37 @@ function formatDateTime(value: string) {
 function translateWorkflowError(message: string) {
   if (message.includes("COURIER_REQUIRED")) return "Atribua um entregador antes de iniciar a entrega.";
   if (message.includes("PAYMENT_REQUIRED")) return "A produção só pode começar depois da confirmação do pagamento.";
+  if (message.includes("CASH_RECEIPT_REQUIRED")) return "Em pedidos em dinheiro, o entregador confirma a entrega e o recebimento.";
   if (message.includes("INVALID_STATUS_TRANSITION")) return "Essa mudança não é permitida para o estado atual do pedido.";
   return "Não foi possível atualizar o pedido. Atualize o painel e tente novamente.";
 }
 
 const styles = StyleSheet.create({
+  cashPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 16, marginTop: 14 },
+  cashPanelEyebrow: { color: "#087E83", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  cashRow: { gap: 10 },
+  cashRowHeader: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  cashRowInfo: { flexGrow: 1, flexBasis: 160 },
+  cashName: { color: "#102A43", fontSize: 12, fontWeight: "900" },
+  cashDetails: { color: "#627D8A", fontSize: 10, marginTop: 2 },
+  cashBalanceDue: { color: "#A13B2C", fontSize: 12, fontWeight: "900" },
+  cashBalanceOk: { color: "#176A50", fontSize: 12, fontWeight: "900" },
+  cashSettleButton: { minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#087E83", paddingHorizontal: 13 },
+  cashSettleButtonText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
+  cashForm: { gap: 8, borderRadius: 12, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#DCE7EA", padding: 12 },
+  cashInput: { height: 44, borderRadius: 11, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#F9FBFC", color: "#102A43", fontSize: 12, paddingHorizontal: 12 },
+  cashConfirmButton: { minHeight: 42, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#38D6D2", paddingHorizontal: 14 },
+  cashConfirmText: { color: "#071D2D", fontSize: 11, fontWeight: "900" },
+  ratingPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#F0E2B8", backgroundColor: "#FFFBEF", padding: 16, marginTop: 14 },
+  ratingPanelEyebrow: { color: "#8A6A12", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  ratingPanelEmpty: { color: "#8A6848", fontSize: 11 },
+  ratingRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  ratingName: { flexGrow: 1, flexBasis: 140, color: "#102A43", fontSize: 12, fontWeight: "900" },
+  ratingValue: { color: "#627D8A", fontSize: 10, fontWeight: "700" },
+  ratingComments: { gap: 8, borderTopWidth: 1, borderTopColor: "#F0E2B8", paddingTop: 10, marginTop: 4 },
+  ratingCommentsTitle: { color: "#8A6A12", fontSize: 8, fontWeight: "900", letterSpacing: 1.1 },
+  ratingCommentRow: { gap: 3 },
+  ratingCommentText: { color: "#486876", fontSize: 11, lineHeight: 17 },
   toolbar: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", justifyContent: "space-between", gap: 14, marginTop: 24 },
   toolbarActions: { flexDirection: "row", flexWrap: "wrap", justifyContent: "flex-end", gap: 8 },
   accessButton: { minHeight: 42, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#071D2D", paddingHorizontal: 15 },

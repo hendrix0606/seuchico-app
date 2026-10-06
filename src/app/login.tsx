@@ -13,6 +13,7 @@ import {
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import type { UserRole } from "../context/auth-context";
+import { BrandMark } from "../components/BrandMark";
 import { visualShadows } from "../constants/visual-style";
 import { routeForRole } from "../lib/role-routes";
 
@@ -95,9 +96,7 @@ export default function LoginScreen() {
           </Pressable>
 
           <View style={styles.brand}>
-            <View style={styles.brandIcon}>
-              <Text style={styles.brandIconText}>SC</Text>
-            </View>
+            <BrandMark size={43} />
             <View>
               <Text style={styles.brandName}>SeuChico</Text>
               <Text style={styles.brandTagline}>INGRESSOS PERSONALIZADOS</Text>
@@ -270,15 +269,6 @@ const styles = StyleSheet.create({
   backButton: { alignSelf: "flex-start", paddingVertical: 8, marginBottom: 20 },
   backButtonText: { color: "#087E83", fontSize: 13, fontWeight: "800" },
   brand: { flexDirection: "row", alignItems: "center", gap: 11 },
-  brandIcon: {
-    width: 43,
-    height: 43,
-    borderRadius: 14,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#071D2D",
-  },
-  brandIconText: { color: "#38D6D2", fontSize: 14, fontWeight: "900" },
   brandName: {
     color: "#102A43",
     fontSize: 20,

@@ -15,6 +15,7 @@ import {
 } from "react-native";
 import { isStrongPassword, STRONG_PASSWORD_HINT } from "../lib/passwords";
 import { supabase } from "../lib/supabase";
+import { BrandMark } from "../components/BrandMark";
 import { visualShadows } from "../constants/visual-style";
 
 type Feedback = { tone: "success" | "error"; text: string } | null;
@@ -133,7 +134,7 @@ export default function NewPasswordScreen() {
       <StatusBar style="dark" />
       <ScrollView contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
         <View style={styles.card}>
-          <View style={styles.brandIcon}><Text style={styles.brandIconText}>SC</Text></View>
+          <BrandMark size={50} style={styles.brandMark} />
           <Text style={styles.eyebrow}>ACESSO SEGURO</Text>
           <Text style={styles.title}>Crie uma nova senha</Text>
           <Text style={styles.description}>A nova senha substituirá a anterior em todos os dispositivos.</Text>
@@ -193,8 +194,7 @@ const styles = StyleSheet.create({
   screen: { flex: 1, backgroundColor: "#FFF7F3" },
   scrollContent: { flexGrow: 1, alignItems: "center", justifyContent: "center", padding: 20 },
   card: { ...visualShadows.raised, width: "100%", maxWidth: 590, borderRadius: 28, borderWidth: 1, borderColor: "#DCE7EA", backgroundColor: "#FFFFFF", padding: Platform.OS === "web" ? 40 : 24, marginVertical: 20 },
-  brandIcon: { width: 50, height: 50, borderRadius: 16, alignItems: "center", justifyContent: "center", backgroundColor: "#071D2D", marginBottom: 24 },
-  brandIconText: { color: "#38D6D2", fontSize: 15, fontWeight: "900" },
+  brandMark: { marginBottom: 24 },
   eyebrow: { color: "#087E83", fontSize: 9, fontWeight: "900", letterSpacing: 1.5 },
   title: { color: "#102A43", fontSize: 31, lineHeight: 38, fontWeight: "900", letterSpacing: -1, marginTop: 8 },
   description: { color: "#627D8A", fontSize: 13, lineHeight: 21, marginTop: 9 },

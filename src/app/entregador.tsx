@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { DeliveryRouteMap } from "../components/DeliveryRouteMap";
@@ -23,6 +24,12 @@ import {
   openExternalRoute,
   statusLabel,
 } from "../lib/delivery";
+import {
+  fetchCashBalances,
+  reportCashRefusal,
+  translateRefusalError,
+  type CashBalance,
+} from "../lib/cash-settlement";
 import { notifyOrderEvent } from "../lib/push-notifications";
 import { supabase } from "../lib/supabase";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
@@ -33,7 +40,7 @@ import type {
 } from "../types/delivery";
 
 const ORDER_SELECT =
-  "id, order_number, user_id, assigned_courier_id, status, payment_status, quantity, total_cents, delivery_recipient, delivery_phone, delivery_zip_code, delivery_street, delivery_number, delivery_complement, delivery_neighborhood, delivery_city, delivery_state, delivery_reference, updated_at, ticket_drafts(event_name, event_date, event_time, location, primary_color, accent_color, ticket_templates(name))";
+  "id, order_number, user_id, assigned_courier_id, status, payment_status, payment_provider, quantity, total_cents, delivery_recipient, delivery_phone, delivery_zip_code, delivery_street, delivery_number, delivery_complement, delivery_neighborhood, delivery_city, delivery_state, delivery_reference, updated_at, ticket_drafts(event_name, event_date, event_time, location, primary_color, accent_color, ticket_templates(name))";
 
 export default function CourierScreen() {
   const router = useRouter();
@@ -46,6 +53,10 @@ export default function CourierScreen() {
   const [isRouteLoading, setIsRouteLoading] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [showDeliveryConfirmation, setShowDeliveryConfirmation] = useState(false);
+  const [cashBalance, setCashBalance] = useState<CashBalance | null>(null);
+  const [showRefusal, setShowRefusal] = useState(false);
+  const [refusalNote, setRefusalNote] = useState("");
+  const [isRefusing, setIsRefusing] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [lastLocationAt, setLastLocationAt] = useState<string | null>(null);
   const [route, setRoute] = useState<DeliveryRoute | null>(null);
@@ -77,6 +88,25 @@ export default function CourierScreen() {
       );
     } else {
       const nextOrders = (data ?? []) as unknown as DeliveryOrder[];
+
+      // O troco fica em consulta separada: antes do SQL 017 a coluna nao existe
+      // e uma falha aqui nao pode derrubar a lista de entregas.
+      const cashOrderIds = nextOrders
+        .filter((order) => order.payment_provider === "cash")
+        .map((order) => order.id);
+
+      if (cashOrderIds.length > 0) {
+        const { data: cashRows } = await supabase
+          .from("orders")
+          .select("id, cash_change_for_cents")
+          .in("id", cashOrderIds);
+
+        for (const row of cashRows ?? []) {
+          const target = nextOrders.find((order) => order.id === row.id);
+          if (target) target.cash_change_for_cents = row.cash_change_for_cents;
+        }
+      }
+
       setOrders(nextOrders);
       setSelectedOrderId((current) =>
         nextOrders.some((order) => order.id === current)
@@ -84,6 +114,10 @@ export default function CourierScreen() {
           : nextOrders[0]?.id ?? null,
       );
     }
+
+    // Saldo de dinheiro a repassar: se o SQL 019 nao foi executado, so some o card.
+    const balances = await fetchCashBalances();
+    setCashBalance(balances?.find((item) => item.courier_id === session.user.id) ?? null);
 
     if (!silent) setIsLoading(false);
   };
@@ -233,12 +267,40 @@ export default function CourierScreen() {
     } else {
       stopTracking();
       setShowDeliveryConfirmation(false);
-      setMessage("Entrega confirmada com sucesso.");
+      setMessage(
+        isCashToCollect(selectedOrder)
+          ? "Entrega confirmada e pagamento em dinheiro registrado."
+          : "Entrega confirmada com sucesso.",
+      );
       await notifyOrderEvent(selectedOrder.id, "order_status");
       await loadOrders({ silent: true });
     }
 
     setIsConfirming(false);
+  };
+
+  const handleReportRefusal = async () => {
+    if (!selectedOrder) return;
+
+    setIsRefusing(true);
+    setErrorMessage(null);
+
+    try {
+      await reportCashRefusal(selectedOrder.id, refusalNote);
+      stopTracking();
+      setShowRefusal(false);
+      setShowDeliveryConfirmation(false);
+      setRefusalNote("");
+      setMessage("Recusa registrada. O pedido foi cancelado e o administrador será informado.");
+      await notifyOrderEvent(selectedOrder.id, "order_status");
+      await loadOrders({ silent: true });
+    } catch (error) {
+      setErrorMessage(
+        translateRefusalError(error instanceof Error ? error.message : String(error)),
+      );
+    }
+
+    setIsRefusing(false);
   };
 
   return (
@@ -257,6 +319,17 @@ export default function CourierScreen() {
       {errorMessage ? (
         <View accessibilityLiveRegion="polite" style={styles.errorCard}>
           <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      ) : null}
+
+      {cashBalance && cashBalance.received_cents > 0 ? (
+        <View style={styles.balanceCard}>
+          <Text style={styles.balanceTitle}>
+            Dinheiro a repassar: {formatCurrency(cashBalance.balance_cents)}
+          </Text>
+          <Text style={styles.balanceText}>
+            Recebido em entregas: {formatCurrency(cashBalance.received_cents)} · Já repassado: {formatCurrency(cashBalance.settled_cents)}. O administrador registra o repasse quando você entregar o valor.
+          </Text>
         </View>
       ) : null}
 
@@ -466,19 +539,40 @@ export default function CourierScreen() {
                 </Text>
               </Pressable>
 
+              {isCashToCollect(selectedOrder) ? (
+                <View style={styles.cashCard}>
+                  <Text style={styles.cashCardTitle}>
+                    Receber {formatCurrency(selectedOrder.total_cents)} em dinheiro
+                  </Text>
+                  <Text style={styles.cashCardText}>
+                    {cashChangeInstruction(selectedOrder)}
+                  </Text>
+                </View>
+              ) : null}
+
               {!showDeliveryConfirmation ? (
                 <Pressable
                   accessibilityRole="button"
                   onPress={() => setShowDeliveryConfirmation(true)}
                   style={({ pressed }) => [styles.deliveryButton, pressed && styles.pressed]}
                 >
-                  <Text style={styles.deliveryButtonText}>Confirmar que o pedido foi entregue</Text>
+                  <Text style={styles.deliveryButtonText}>
+                    {isCashToCollect(selectedOrder)
+                      ? "Confirmar entrega e recebimento"
+                      : "Confirmar que o pedido foi entregue"}
+                  </Text>
                 </Pressable>
               ) : (
                 <View style={styles.confirmCard}>
-                  <Text style={styles.confirmTitle}>O cliente já recebeu o pedido?</Text>
+                  <Text style={styles.confirmTitle}>
+                    {isCashToCollect(selectedOrder)
+                      ? `Você recebeu ${formatCurrency(selectedOrder.total_cents)} em dinheiro e entregou o pedido?`
+                      : "O cliente já recebeu o pedido?"}
+                  </Text>
                   <Text style={styles.confirmText}>
-                    Esta ação encerra a entrega e fica registrada no histórico.
+                    {isCashToCollect(selectedOrder)
+                      ? "Ao confirmar, o pagamento em dinheiro é registrado em seu nome e a entrega é encerrada. Esta ação fica no histórico."
+                      : "Esta ação encerra a entrega e fica registrada no histórico."}
                   </Text>
                   <View style={styles.confirmActions}>
                     <Pressable
@@ -500,20 +594,89 @@ export default function CourierScreen() {
                       ]}
                     >
                       <Text style={styles.confirmButtonText}>
-                        {isConfirming ? "Confirmando..." : "Sim, foi entregue"}
+                        {isConfirming
+                          ? "Confirmando..."
+                          : isCashToCollect(selectedOrder)
+                            ? "Sim, recebi e entreguei"
+                            : "Sim, foi entregue"}
                       </Text>
                     </Pressable>
                   </View>
                 </View>
               )}
+
+              {isCashToCollect(selectedOrder) ? (
+                !showRefusal ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setShowRefusal(true)}
+                    style={({ pressed }) => [styles.refusalButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.refusalButtonText}>Cliente recusou pagar</Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.refusalCard}>
+                    <Text style={styles.refusalTitle}>Registrar recusa de pagamento</Text>
+                    <Text style={styles.refusalText}>
+                      O pedido será cancelado e o cliente ficará 90 dias sem poder pagar em dinheiro. Descreva o que aconteceu.
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Motivo da recusa"
+                      maxLength={500}
+                      multiline
+                      onChangeText={setRefusalNote}
+                      placeholder="Ex.: o cliente disse que não ia pagar e não quis receber."
+                      placeholderTextColor="#91A4AD"
+                      style={styles.refusalInput}
+                      value={refusalNote}
+                    />
+                    <View style={styles.confirmActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isRefusing}
+                        onPress={() => setShowRefusal(false)}
+                        style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+                      >
+                        <Text style={styles.cancelButtonText}>Voltar</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isRefusing || refusalNote.trim().length < 3}
+                        onPress={() => void handleReportRefusal()}
+                        style={({ pressed }) => [
+                          styles.refusalConfirmButton,
+                          (isRefusing || refusalNote.trim().length < 3) && styles.disabled,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.refusalConfirmText}>
+                          {isRefusing ? "Registrando..." : "Cancelar pedido por recusa"}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )
+              ) : null}
             </View>
           ) : selectedOrder.status === "ready_for_delivery" ? (
-            <View style={styles.noticeCard}>
-              <Text style={styles.noticeTitle}>Aguardando saída para entrega</Text>
-              <Text style={styles.noticeText}>
-                O administrador precisa registrar a saída antes que o GPS possa ser compartilhado.
-              </Text>
-            </View>
+            <>
+              {isCashToCollect(selectedOrder) ? (
+                <View style={styles.cashCard}>
+                  <Text style={styles.cashCardTitle}>
+                    Receber {formatCurrency(selectedOrder.total_cents)} em dinheiro
+                  </Text>
+                  <Text style={styles.cashCardText}>
+                    {cashChangeInstruction(selectedOrder)}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.noticeCard}>
+                <Text style={styles.noticeTitle}>Aguardando saída para entrega</Text>
+                <Text style={styles.noticeText}>
+                  O administrador precisa registrar a saída antes que o GPS possa ser compartilhado.
+                </Text>
+              </View>
+            </>
           ) : (
             <View style={styles.deliveredCard}>
               <Text style={styles.deliveredTitle}>✓ Entrega concluída</Text>
@@ -573,7 +736,36 @@ function normalizeAccuracy(value: number | null) {
     : null;
 }
 
+function isCashToCollect(order: DeliveryOrder) {
+  return order.payment_provider === "cash" && order.payment_status === "on_delivery";
+}
+
+function cashChangeInstruction(order: DeliveryOrder) {
+  if (!order.cash_change_for_cents) {
+    return "O cliente não pediu troco. Confirme o valor antes de entregar os ingressos.";
+  }
+
+  const change = order.cash_change_for_cents - order.total_cents;
+  return change > 0
+    ? `O cliente vai pagar com ${formatCurrency(order.cash_change_for_cents)}. Leve ${formatCurrency(change)} de troco.`
+    : "O cliente vai pagar o valor exato, sem troco.";
+}
+
 const styles = StyleSheet.create({
+  balanceCard: { borderRadius: 16, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 16, marginTop: 14 },
+  balanceTitle: { color: "#087E83", fontSize: 14, fontWeight: "900" },
+  balanceText: { color: "#486876", fontSize: 11, lineHeight: 17, marginTop: 5 },
+  refusalButton: { minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 13, borderWidth: 1, borderColor: "#F1B8AE", backgroundColor: "#FFF3F0", paddingHorizontal: 14 },
+  refusalButtonText: { color: "#A13B2C", fontSize: 11, fontWeight: "900" },
+  refusalCard: { gap: 9, borderRadius: 16, borderWidth: 1, borderColor: "#F1B8AE", backgroundColor: "#FFF8F6", padding: 15 },
+  refusalTitle: { color: "#8A3325", fontSize: 13, fontWeight: "900" },
+  refusalText: { color: "#8A5A52", fontSize: 11, lineHeight: 17 },
+  refusalInput: { minHeight: 70, borderRadius: 12, borderWidth: 1, borderColor: "#EBC9C2", backgroundColor: "#FFFFFF", color: "#102A43", fontSize: 12, paddingHorizontal: 12, paddingVertical: 10, textAlignVertical: "top" },
+  refusalConfirmButton: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#A13B2C", paddingHorizontal: 14 },
+  refusalConfirmText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
+  cashCard: { borderRadius: 16, borderWidth: 1, borderColor: "#F0D79C", backgroundColor: "#FFF8E6", padding: 16 },
+  cashCardTitle: { color: "#77530D", fontSize: 15, fontWeight: "900" },
+  cashCardText: { color: "#8A6848", fontSize: 11, lineHeight: 18, marginTop: 6 },
   content: { gap: 16, marginTop: 22 },
   successCard: { borderRadius: 15, borderWidth: 1, borderColor: "#A9E1D0", backgroundColor: "#ECFBF5", padding: 14, marginTop: 18 },
   successText: { color: "#176A50", fontSize: 11, lineHeight: 17, fontWeight: "800" },

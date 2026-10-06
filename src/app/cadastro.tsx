@@ -12,6 +12,7 @@ import {
   View,
 } from "react-native";
 import { supabase } from "../lib/supabase";
+import { BrandMark } from "../components/BrandMark";
 import { visualShadows } from "../constants/visual-style";
 import { isStrongPassword, STRONG_PASSWORD_HINT } from "../lib/passwords";
 
@@ -118,9 +119,7 @@ export default function RegisterScreen() {
           </Pressable>
 
           <View style={styles.heading}>
-            <View style={styles.brandIcon}>
-              <Text style={styles.brandIconText}>SC</Text>
-            </View>
+            <BrandMark size={50} style={styles.brandMark} />
             <Text style={styles.eyebrow}>CONTA DE CLIENTE</Text>
             <Text style={styles.title}>Vamos começar?</Text>
             <Text style={styles.description}>
@@ -272,16 +271,7 @@ const styles = StyleSheet.create({
   backButton: { alignSelf: "flex-start", paddingVertical: 8 },
   backButtonText: { color: "#087E83", fontSize: 13, fontWeight: "800" },
   heading: { alignItems: "center", marginTop: 16 },
-  brandIcon: {
-    width: 50,
-    height: 50,
-    borderRadius: 16,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "#071D2D",
-    marginBottom: 20,
-  },
-  brandIconText: { color: "#38D6D2", fontSize: 15, fontWeight: "900" },
+  brandMark: { marginBottom: 20 },
   eyebrow: {
     color: "#087E83",
     fontSize: 9,
