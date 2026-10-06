@@ -7,6 +7,7 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { DeliveryRouteMap } from "../components/DeliveryRouteMap";
@@ -23,6 +24,12 @@ import {
   openExternalRoute,
   statusLabel,
 } from "../lib/delivery";
+import {
+  fetchCashBalances,
+  reportCashRefusal,
+  translateRefusalError,
+  type CashBalance,
+} from "../lib/cash-settlement";
 import { notifyOrderEvent } from "../lib/push-notifications";
 import { supabase } from "../lib/supabase";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
@@ -46,6 +53,10 @@ export default function CourierScreen() {
   const [isRouteLoading, setIsRouteLoading] = useState(false);
   const [isConfirming, setIsConfirming] = useState(false);
   const [showDeliveryConfirmation, setShowDeliveryConfirmation] = useState(false);
+  const [cashBalance, setCashBalance] = useState<CashBalance | null>(null);
+  const [showRefusal, setShowRefusal] = useState(false);
+  const [refusalNote, setRefusalNote] = useState("");
+  const [isRefusing, setIsRefusing] = useState(false);
   const [currentLocation, setCurrentLocation] = useState<Coordinate | null>(null);
   const [lastLocationAt, setLastLocationAt] = useState<string | null>(null);
   const [route, setRoute] = useState<DeliveryRoute | null>(null);
@@ -103,6 +114,10 @@ export default function CourierScreen() {
           : nextOrders[0]?.id ?? null,
       );
     }
+
+    // Saldo de dinheiro a repassar: se o SQL 019 nao foi executado, so some o card.
+    const balances = await fetchCashBalances();
+    setCashBalance(balances?.find((item) => item.courier_id === session.user.id) ?? null);
 
     if (!silent) setIsLoading(false);
   };
@@ -264,6 +279,30 @@ export default function CourierScreen() {
     setIsConfirming(false);
   };
 
+  const handleReportRefusal = async () => {
+    if (!selectedOrder) return;
+
+    setIsRefusing(true);
+    setErrorMessage(null);
+
+    try {
+      await reportCashRefusal(selectedOrder.id, refusalNote);
+      stopTracking();
+      setShowRefusal(false);
+      setShowDeliveryConfirmation(false);
+      setRefusalNote("");
+      setMessage("Recusa registrada. O pedido foi cancelado e o administrador será informado.");
+      await notifyOrderEvent(selectedOrder.id, "order_status");
+      await loadOrders({ silent: true });
+    } catch (error) {
+      setErrorMessage(
+        translateRefusalError(error instanceof Error ? error.message : String(error)),
+      );
+    }
+
+    setIsRefusing(false);
+  };
+
   return (
     <ProtectedRoleScreen
       eyebrow="ÁREA DO ENTREGADOR"
@@ -280,6 +319,17 @@ export default function CourierScreen() {
       {errorMessage ? (
         <View accessibilityLiveRegion="polite" style={styles.errorCard}>
           <Text style={styles.errorText}>{errorMessage}</Text>
+        </View>
+      ) : null}
+
+      {cashBalance && cashBalance.received_cents > 0 ? (
+        <View style={styles.balanceCard}>
+          <Text style={styles.balanceTitle}>
+            Dinheiro a repassar: {formatCurrency(cashBalance.balance_cents)}
+          </Text>
+          <Text style={styles.balanceText}>
+            Recebido em entregas: {formatCurrency(cashBalance.received_cents)} · Já repassado: {formatCurrency(cashBalance.settled_cents)}. O administrador registra o repasse quando você entregar o valor.
+          </Text>
         </View>
       ) : null}
 
@@ -554,6 +604,59 @@ export default function CourierScreen() {
                   </View>
                 </View>
               )}
+
+              {isCashToCollect(selectedOrder) ? (
+                !showRefusal ? (
+                  <Pressable
+                    accessibilityRole="button"
+                    onPress={() => setShowRefusal(true)}
+                    style={({ pressed }) => [styles.refusalButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.refusalButtonText}>Cliente recusou pagar</Text>
+                  </Pressable>
+                ) : (
+                  <View style={styles.refusalCard}>
+                    <Text style={styles.refusalTitle}>Registrar recusa de pagamento</Text>
+                    <Text style={styles.refusalText}>
+                      O pedido será cancelado e o cliente ficará 90 dias sem poder pagar em dinheiro. Descreva o que aconteceu.
+                    </Text>
+                    <TextInput
+                      accessibilityLabel="Motivo da recusa"
+                      maxLength={500}
+                      multiline
+                      onChangeText={setRefusalNote}
+                      placeholder="Ex.: o cliente disse que não ia pagar e não quis receber."
+                      placeholderTextColor="#91A4AD"
+                      style={styles.refusalInput}
+                      value={refusalNote}
+                    />
+                    <View style={styles.confirmActions}>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isRefusing}
+                        onPress={() => setShowRefusal(false)}
+                        style={({ pressed }) => [styles.cancelButton, pressed && styles.pressed]}
+                      >
+                        <Text style={styles.cancelButtonText}>Voltar</Text>
+                      </Pressable>
+                      <Pressable
+                        accessibilityRole="button"
+                        disabled={isRefusing || refusalNote.trim().length < 3}
+                        onPress={() => void handleReportRefusal()}
+                        style={({ pressed }) => [
+                          styles.refusalConfirmButton,
+                          (isRefusing || refusalNote.trim().length < 3) && styles.disabled,
+                          pressed && styles.pressed,
+                        ]}
+                      >
+                        <Text style={styles.refusalConfirmText}>
+                          {isRefusing ? "Registrando..." : "Cancelar pedido por recusa"}
+                        </Text>
+                      </Pressable>
+                    </View>
+                  </View>
+                )
+              ) : null}
             </View>
           ) : selectedOrder.status === "ready_for_delivery" ? (
             <>
@@ -649,6 +752,17 @@ function cashChangeInstruction(order: DeliveryOrder) {
 }
 
 const styles = StyleSheet.create({
+  balanceCard: { borderRadius: 16, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 16, marginTop: 14 },
+  balanceTitle: { color: "#087E83", fontSize: 14, fontWeight: "900" },
+  balanceText: { color: "#486876", fontSize: 11, lineHeight: 17, marginTop: 5 },
+  refusalButton: { minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 13, borderWidth: 1, borderColor: "#F1B8AE", backgroundColor: "#FFF3F0", paddingHorizontal: 14 },
+  refusalButtonText: { color: "#A13B2C", fontSize: 11, fontWeight: "900" },
+  refusalCard: { gap: 9, borderRadius: 16, borderWidth: 1, borderColor: "#F1B8AE", backgroundColor: "#FFF8F6", padding: 15 },
+  refusalTitle: { color: "#8A3325", fontSize: 13, fontWeight: "900" },
+  refusalText: { color: "#8A5A52", fontSize: 11, lineHeight: 17 },
+  refusalInput: { minHeight: 70, borderRadius: 12, borderWidth: 1, borderColor: "#EBC9C2", backgroundColor: "#FFFFFF", color: "#102A43", fontSize: 12, paddingHorizontal: 12, paddingVertical: 10, textAlignVertical: "top" },
+  refusalConfirmButton: { flex: 1, minHeight: 46, alignItems: "center", justifyContent: "center", borderRadius: 13, backgroundColor: "#A13B2C", paddingHorizontal: 14 },
+  refusalConfirmText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   cashCard: { borderRadius: 16, borderWidth: 1, borderColor: "#F0D79C", backgroundColor: "#FFF8E6", padding: 16 },
   cashCardTitle: { color: "#77530D", fontSize: 15, fontWeight: "900" },
   cashCardText: { color: "#8A6848", fontSize: 11, lineHeight: 18, marginTop: 6 },

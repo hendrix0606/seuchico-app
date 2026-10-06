@@ -740,6 +740,7 @@ function cashChangeText(order: OrderListItem) {
 
 function translateCashError(message: string) {
   if (message.includes("CASH_NOT_ENABLED")) return "O pagamento em dinheiro não está disponível no momento.";
+  if (message.includes("CASH_BLOCKED_AFTER_REFUSAL")) return "Por uma recusa de pagamento anterior, o pagamento em dinheiro fica indisponível por 90 dias. Use PIX ou cartão.";
   if (message.includes("CASH_LIMIT_EXCEEDED")) return "Este pedido passa do valor máximo aceito em dinheiro. Use PIX ou cartão.";
   if (message.includes("INVALID_CHANGE_AMOUNT")) return "O valor para troco precisa ser igual ou maior que o total do pedido.";
   if (message.includes("ORDER_NOT_AWAITING_PAYMENT")) return "Este pedido não aceita mais mudança na forma de pagamento.";

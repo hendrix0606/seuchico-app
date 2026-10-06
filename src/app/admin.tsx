@@ -12,6 +12,13 @@ import {
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { StarRating } from "../components/StarRating";
 import { visualShadows } from "../constants/visual-style";
+import {
+  fetchCashBalances,
+  registerCashSettlement,
+  translateSettlementError,
+  type CashBalance,
+} from "../lib/cash-settlement";
+import { formatMoneyInput, parseMoneyInput } from "../lib/finance";
 import { notifyOrderEvent } from "../lib/push-notifications";
 import {
   fetchRatingSummary,
@@ -116,6 +123,11 @@ export default function AdminScreen() {
   const [feedback, setFeedback] = useState<Feedback>(null);
   const [ratingSummary, setRatingSummary] = useState<CourierRatingSummary[] | null>(null);
   const [recentComments, setRecentComments] = useState<RecentRating[]>([]);
+  const [cashBalances, setCashBalances] = useState<CashBalance[] | null>(null);
+  const [settleCourierId, setSettleCourierId] = useState<string | null>(null);
+  const [settleAmount, setSettleAmount] = useState("");
+  const [settleNote, setSettleNote] = useState("");
+  const [isSettling, setIsSettling] = useState(false);
 
   const loadDashboard = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setIsLoading(true);
@@ -152,7 +164,38 @@ export default function AdminScreen() {
     setRatingSummary(summary);
     setRecentComments(comments);
 
+    // Saldo do dinheiro com os entregadores: antes do SQL 019 so esconde o painel.
+    setCashBalances(await fetchCashBalances());
+
     if (!silent) setIsLoading(false);
+  };
+
+  const handleRegisterSettlement = async (courierId: string) => {
+    const amountCents = parseMoneyInput(settleAmount);
+
+    if (amountCents === null || amountCents <= 0) {
+      setFeedback({ tone: "error", text: "Informe o valor do repasse, maior que zero." });
+      return;
+    }
+
+    setIsSettling(true);
+    setFeedback(null);
+
+    try {
+      await registerCashSettlement(courierId, amountCents, settleNote);
+      setSettleCourierId(null);
+      setSettleAmount("");
+      setSettleNote("");
+      setFeedback({ tone: "success", text: `Repasse de ${formatCurrency(amountCents)} registrado.` });
+      setCashBalances(await fetchCashBalances());
+    } catch (error) {
+      setFeedback({
+        tone: "error",
+        text: translateSettlementError(error instanceof Error ? error.message : String(error)),
+      });
+    }
+
+    setIsSettling(false);
   };
 
   useEffect(() => {
@@ -342,6 +385,73 @@ export default function AdminScreen() {
               ))}
             </View>
           ) : null}
+        </View>
+      ) : null}
+
+      {cashBalances && cashBalances.length > 0 ? (
+        <View style={styles.cashPanel}>
+          <Text style={styles.cashPanelEyebrow}>DINHEIRO COM ENTREGADORES</Text>
+          {cashBalances.map((item) => {
+            const isOpen = settleCourierId === item.courier_id;
+            return (
+              <View key={item.courier_id} style={styles.cashRow}>
+                <View style={styles.cashRowHeader}>
+                  <View style={styles.cashRowInfo}>
+                    <Text numberOfLines={1} style={styles.cashName}>{item.courier_name}</Text>
+                    <Text style={styles.cashDetails}>
+                      Recebido {formatCurrency(item.received_cents)} · Repassado {formatCurrency(item.settled_cents)}
+                    </Text>
+                  </View>
+                  <Text style={item.balance_cents > 0 ? styles.cashBalanceDue : styles.cashBalanceOk}>
+                    {item.balance_cents > 0 ? `A repassar ${formatCurrency(item.balance_cents)}` : "Em dia"}
+                  </Text>
+                  {item.balance_cents > 0 ? (
+                    <Pressable
+                      accessibilityRole="button"
+                      onPress={() => {
+                        setSettleCourierId(isOpen ? null : item.courier_id);
+                        setSettleAmount(formatMoneyInput(item.balance_cents));
+                        setSettleNote("");
+                      }}
+                      style={({ pressed }) => [styles.cashSettleButton, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.cashSettleButtonText}>{isOpen ? "Fechar" : "Registrar repasse"}</Text>
+                    </Pressable>
+                  ) : null}
+                </View>
+                {isOpen ? (
+                  <View style={styles.cashForm}>
+                    <TextInput
+                      accessibilityLabel="Valor do repasse"
+                      keyboardType="decimal-pad"
+                      onChangeText={setSettleAmount}
+                      placeholder="Valor do repasse (R$)"
+                      placeholderTextColor="#91A4AD"
+                      style={styles.cashInput}
+                      value={settleAmount}
+                    />
+                    <TextInput
+                      accessibilityLabel="Observação do repasse"
+                      maxLength={300}
+                      onChangeText={setSettleNote}
+                      placeholder="Observação (opcional)"
+                      placeholderTextColor="#91A4AD"
+                      style={styles.cashInput}
+                      value={settleNote}
+                    />
+                    <Pressable
+                      accessibilityRole="button"
+                      disabled={isSettling}
+                      onPress={() => void handleRegisterSettlement(item.courier_id)}
+                      style={({ pressed }) => [styles.cashConfirmButton, isSettling && styles.disabled, pressed && styles.pressed]}
+                    >
+                      <Text style={styles.cashConfirmText}>{isSettling ? "Registrando..." : "Confirmar repasse"}</Text>
+                    </Pressable>
+                  </View>
+                ) : null}
+              </View>
+            );
+          })}
         </View>
       ) : null}
 
@@ -652,7 +762,9 @@ function isCashOnDelivery(order: AdminOrder) {
 
 function paymentLabel(order: AdminOrder) {
   if (order.payment_provider === "cash") {
-    return order.payment_status === "paid" ? "Dinheiro · recebido na entrega" : "Dinheiro na entrega · a receber";
+    if (order.payment_status === "paid") return "Dinheiro · recebido na entrega";
+    if (order.payment_status === "cancelled") return "Dinheiro · recusado pelo cliente";
+    return "Dinheiro na entrega · a receber";
   }
   return order.payment_provider === "pix" ? "PIX" : "Cartão · Stripe";
 }
@@ -707,6 +819,21 @@ function translateWorkflowError(message: string) {
 }
 
 const styles = StyleSheet.create({
+  cashPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 16, marginTop: 14 },
+  cashPanelEyebrow: { color: "#087E83", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  cashRow: { gap: 10 },
+  cashRowHeader: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  cashRowInfo: { flexGrow: 1, flexBasis: 160 },
+  cashName: { color: "#102A43", fontSize: 12, fontWeight: "900" },
+  cashDetails: { color: "#627D8A", fontSize: 10, marginTop: 2 },
+  cashBalanceDue: { color: "#A13B2C", fontSize: 12, fontWeight: "900" },
+  cashBalanceOk: { color: "#176A50", fontSize: 12, fontWeight: "900" },
+  cashSettleButton: { minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#087E83", paddingHorizontal: 13 },
+  cashSettleButtonText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
+  cashForm: { gap: 8, borderRadius: 12, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#DCE7EA", padding: 12 },
+  cashInput: { height: 44, borderRadius: 11, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#F9FBFC", color: "#102A43", fontSize: 12, paddingHorizontal: 12 },
+  cashConfirmButton: { minHeight: 42, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#38D6D2", paddingHorizontal: 14 },
+  cashConfirmText: { color: "#071D2D", fontSize: 11, fontWeight: "900" },
   ratingPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#F0E2B8", backgroundColor: "#FFFBEF", padding: 16, marginTop: 14 },
   ratingPanelEyebrow: { color: "#8A6A12", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
   ratingPanelEmpty: { color: "#8A6848", fontSize: 11 },
