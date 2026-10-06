@@ -7,12 +7,14 @@ import {
   Pressable,
   StyleSheet,
   Text,
+  TextInput,
   View,
 } from "react-native";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
 import { useOrderChatUnread } from "../hooks/use-order-chat-unread";
+import { parseMoneyInput } from "../lib/finance";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
 import { supabase } from "../lib/supabase";
 
@@ -37,8 +39,9 @@ type OrderListItem = {
   delivery_city: string;
   delivery_state: string;
   created_at: string;
-  payment_provider: "stripe" | "pix";
+  payment_provider: "stripe" | "pix" | "cash";
   payment_status: string;
+  cash_change_for_cents?: number | null;
   stripe_checkout_session_id: string | null;
   assigned_courier_id: string | null;
   pix_payment_submissions:
@@ -72,6 +75,10 @@ export default function OrdersScreen() {
   const [paymentError, setPaymentError] = useState<string | null>(null);
   const [isPayingOrderId, setIsPayingOrderId] = useState<string | null>(null);
   const [isPixEnabled, setIsPixEnabled] = useState(false);
+  const [cashSettings, setCashSettings] = useState<{ is_enabled: boolean; max_order_cents: number } | null>(null);
+  const [cashFormOrderId, setCashFormOrderId] = useState<string | null>(null);
+  const [cashChangeInput, setCashChangeInput] = useState("");
+  const [isChoosingCash, setIsChoosingCash] = useState(false);
   const unreadCounts = useOrderChatUnread(orders.map((order) => order.id));
 
   const loadOrders = async ({ silent = false }: { silent?: boolean } = {}) => {
@@ -94,6 +101,25 @@ export default function OrdersScreen() {
       );
     } else {
       const loadedOrders = (data ?? []) as unknown as OrderListItem[];
+
+      // O troco fica em consulta separada: antes do SQL 017 a coluna nao existe
+      // e uma falha aqui nao pode derrubar a lista de pedidos.
+      const cashOrderIds = loadedOrders
+        .filter((order) => order.payment_provider === "cash")
+        .map((order) => order.id);
+
+      if (cashOrderIds.length > 0) {
+        const { data: cashRows } = await supabase
+          .from("orders")
+          .select("id, cash_change_for_cents")
+          .in("id", cashOrderIds);
+
+        for (const row of cashRows ?? []) {
+          const target = loadedOrders.find((order) => order.id === row.id);
+          if (target) target.cash_change_for_cents = row.cash_change_for_cents;
+        }
+      }
+
       setOrders(loadedOrders);
 
       const returnedOrder = returnedSessionId
@@ -114,7 +140,51 @@ export default function OrdersScreen() {
       .maybeSingle();
     setIsPixEnabled(Boolean(pixSettings?.is_enabled));
 
+    // Se o SQL 017 ainda nao foi executado, a consulta falha e a opcao some.
+    const { data: cashData } = await supabase
+      .from("cash_settings")
+      .select("is_enabled, max_order_cents")
+      .eq("id", 1)
+      .maybeSingle();
+    setCashSettings(cashData ?? null);
+
     if (!silent) setIsLoading(false);
+  };
+
+  const handleChooseCash = async (order: OrderListItem) => {
+    setPaymentError(null);
+    setPaymentMessage(null);
+
+    let changeForCents: number | null = null;
+    if (cashChangeInput.trim()) {
+      changeForCents = parseMoneyInput(cashChangeInput);
+
+      if (changeForCents === null || changeForCents < order.total_cents) {
+        setPaymentError(
+          `Informe um valor igual ou maior que o total do pedido (${formatCurrency(order.total_cents)}), ou deixe em branco se não precisa de troco.`,
+        );
+        return;
+      }
+    }
+
+    setIsChoosingCash(true);
+    const { error } = await supabase.rpc("choose_cash_payment", {
+      p_order_id: order.id,
+      p_change_for_cents: changeForCents,
+    });
+    setIsChoosingCash(false);
+
+    if (error) {
+      setPaymentError(translateCashError(error.message));
+      return;
+    }
+
+    setCashFormOrderId(null);
+    setCashChangeInput("");
+    setPaymentMessage(
+      "Pagamento em dinheiro registrado. Aguarde o aceite do pedido; você pagará ao entregador na entrega.",
+    );
+    await loadOrders({ silent: true });
   };
 
   useEffect(() => {
@@ -283,9 +353,15 @@ export default function OrdersScreen() {
       ) : (
         <View style={styles.list}>
           {orders.map((order) => {
-            const details = statusDetails(order.status);
+            const isCashPending =
+              order.payment_provider === "cash" && order.payment_status === "on_delivery";
+            const details = statusDetails(order.status, isCashPending);
             const draft = order.ticket_drafts;
             const pixSubmission = firstSubmission(order.pix_payment_submissions);
+            const canChooseCash =
+              Boolean(cashSettings?.is_enabled) &&
+              order.total_cents <= (cashSettings?.max_order_cents ?? 0) &&
+              pixSubmission?.status !== "pending";
 
             return (
               <View key={order.id} style={styles.orderCard}>
@@ -338,18 +414,23 @@ export default function OrdersScreen() {
                   {order.status === "awaiting_payment" ? (
                     <View style={styles.nextStepNotice}>
                       <Text style={styles.nextStepTitle}>
-                        {pixSubmission?.status === "pending"
-                          ? "Comprovante PIX em análise"
-                          : pixSubmission?.status === "rejected"
-                            ? "Comprovante PIX não aprovado"
-                            : "Aguardando pagamento"}
+                        {isCashPending
+                          ? "Dinheiro na entrega · aguardando aceite"
+                          : pixSubmission?.status === "pending"
+                            ? "Comprovante PIX em análise"
+                            : pixSubmission?.status === "rejected"
+                              ? "Comprovante PIX não aprovado"
+                              : "Aguardando pagamento"}
                       </Text>
                       <Text style={styles.nextStepText}>
-                        {pixSubmission?.status === "pending"
-                          ? "Aguarde a conferência do administrador. A produção ainda não foi iniciada."
-                          : pixSubmission?.status === "rejected"
-                            ? pixSubmission.admin_note || "Revise o pagamento e envie um novo comprovante."
-                            : "Escolha PIX com comprovante ou cartão pela página oficial do Stripe."}
+                        {isCashPending
+                          ? `Você pagará ${formatCurrency(order.total_cents)} ao entregador.${cashChangeText(order)} A produção começa quando o pedido for aceito. Se preferir, ainda pode pagar por PIX ou cartão.`
+                          : pixSubmission?.status === "pending"
+                            ? "Aguarde a conferência do administrador. A produção ainda não foi iniciada."
+                            : pixSubmission?.status === "rejected"
+                              ? pixSubmission.admin_note || "Revise o pagamento e envie um novo comprovante."
+                              : "Escolha PIX com comprovante, cartão pela página oficial do Stripe" +
+                                (canChooseCash ? " ou pague em dinheiro na entrega." : ".")}
                       </Text>
                       {pixSubmission?.status === "pending" ? (
                         <Pressable
@@ -392,8 +473,65 @@ export default function OrdersScreen() {
                               {isPayingOrderId === order.id ? "Abrindo..." : "Pagar com cartão"}
                             </Text>
                           </Pressable>
+                          {canChooseCash && !isCashPending ? (
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => {
+                                setCashChangeInput("");
+                                setCashFormOrderId(cashFormOrderId === order.id ? null : order.id);
+                              }}
+                              style={({ pressed }) => [styles.cashButton, pressed && styles.pressed]}
+                            >
+                              <Text style={styles.cashButtonText}>Dinheiro na entrega</Text>
+                            </Pressable>
+                          ) : null}
                         </View>
                       )}
+
+                      {cashFormOrderId === order.id && canChooseCash && !isCashPending ? (
+                        <View style={styles.cashForm}>
+                          <Text style={styles.cashFormTitle}>Pagar em dinheiro na entrega</Text>
+                          <Text style={styles.cashFormText}>
+                            Total: {formatCurrency(order.total_cents)}. Pague direto ao entregador quando receber os ingressos. Se precisar de troco, diga com qual valor você vai pagar (opcional).
+                          </Text>
+                          <TextInput
+                            accessibilityLabel="Valor com que vai pagar"
+                            keyboardType="decimal-pad"
+                            onChangeText={setCashChangeInput}
+                            placeholder="Troco para R$ (ex.: 50,00)"
+                            placeholderTextColor="#91A4AD"
+                            style={styles.cashInput}
+                            value={cashChangeInput}
+                          />
+                          <View style={styles.cashFormButtons}>
+                            <Pressable
+                              accessibilityRole="button"
+                              disabled={isChoosingCash}
+                              onPress={() => void handleChooseCash(order)}
+                              style={({ pressed }) => [styles.cashConfirmButton, isChoosingCash && styles.disabled, pressed && styles.pressed]}
+                            >
+                              {isChoosingCash ? <ActivityIndicator color="#FFFFFF" size="small" /> : null}
+                              <Text style={styles.cashConfirmText}>{isChoosingCash ? "Registrando..." : "Confirmar dinheiro na entrega"}</Text>
+                            </Pressable>
+                            <Pressable
+                              accessibilityRole="button"
+                              onPress={() => setCashFormOrderId(null)}
+                              style={({ pressed }) => [styles.cashCancelButton, pressed && styles.pressed]}
+                            >
+                              <Text style={styles.cashCancelText}>Cancelar</Text>
+                            </Pressable>
+                          </View>
+                        </View>
+                      ) : null}
+                    </View>
+                  ) : null}
+
+                  {isCashPending && order.status !== "awaiting_payment" && order.status !== "delivered" && order.status !== "cancelled" ? (
+                    <View style={styles.cashNotice}>
+                      <Text style={styles.cashNoticeTitle}>Pagamento em dinheiro na entrega</Text>
+                      <Text style={styles.cashNoticeText}>
+                        Tenha {formatCurrency(order.total_cents)} separado para pagar ao entregador.{cashChangeText(order)}
+                      </Text>
                     </View>
                   ) : null}
 
@@ -487,7 +625,24 @@ function InfoItem({ label, value, strong = false, wide = false }: { label: strin
   );
 }
 
-function statusDetails(status: OrderStatus) {
+function cashChangeText(order: OrderListItem) {
+  if (!order.cash_change_for_cents) return "";
+  const change = order.cash_change_for_cents - order.total_cents;
+  return change > 0
+    ? ` Troco solicitado: ${formatCurrency(change)} (você pagará com ${formatCurrency(order.cash_change_for_cents)}).`
+    : "";
+}
+
+function translateCashError(message: string) {
+  if (message.includes("CASH_NOT_ENABLED")) return "O pagamento em dinheiro não está disponível no momento.";
+  if (message.includes("CASH_LIMIT_EXCEEDED")) return "Este pedido passa do valor máximo aceito em dinheiro. Use PIX ou cartão.";
+  if (message.includes("INVALID_CHANGE_AMOUNT")) return "O valor para troco precisa ser igual ou maior que o total do pedido.";
+  if (message.includes("ORDER_NOT_AWAITING_PAYMENT")) return "Este pedido não aceita mais mudança na forma de pagamento.";
+  return "Não foi possível registrar o pagamento em dinheiro. Confirme se o SQL da Etapa 17 foi executado.";
+}
+
+function statusDetails(status: OrderStatus, isCashPending = false) {
+  if (status === "awaiting_payment" && isCashPending) return { label: "DINHEIRO NA ENTREGA", color: "#245F7A", background: "#E1F3FA" };
   if (status === "paid") return { label: "PAGO", color: "#176A50", background: "#DFF6EC" };
   if (status === "in_production") return { label: "EM PRODUÇÃO", color: "#77530D", background: "#FFF0C9" };
   if (status === "ready_for_delivery") return { label: "PRONTO PARA ENTREGA", color: "#245F7A", background: "#E1F3FA" };
@@ -541,6 +696,20 @@ const styles = StyleSheet.create({
   payButtonText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
   payButtonArrow: { color: "#071D2D", fontSize: 18, fontWeight: "900" },
   pixButton: { minHeight: 46, flex: 1, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 10, borderRadius: 13, backgroundColor: "#38D6D2", paddingHorizontal: 15 },
+  cashButton: { minHeight: 46, flex: 1, alignItems: "center", justifyContent: "center", borderRadius: 13, borderWidth: 1, borderColor: "#087E83", backgroundColor: "#FFFFFF", paddingHorizontal: 15 },
+  cashButtonText: { color: "#087E83", fontSize: 11, fontWeight: "900" },
+  cashForm: { gap: 10, borderRadius: 14, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 14, marginTop: 12 },
+  cashFormTitle: { color: "#102A43", fontSize: 12, fontWeight: "900" },
+  cashFormText: { color: "#627D8A", fontSize: 10, lineHeight: 16 },
+  cashInput: { height: 48, borderRadius: 12, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#FFFFFF", color: "#102A43", fontSize: 13, paddingHorizontal: 14 },
+  cashFormButtons: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 8 },
+  cashConfirmButton: { minHeight: 44, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 8, borderRadius: 12, backgroundColor: "#087E83", paddingHorizontal: 16 },
+  cashConfirmText: { color: "#FFFFFF", fontSize: 11, fontWeight: "900" },
+  cashCancelButton: { minHeight: 44, alignItems: "center", justifyContent: "center", borderRadius: 12, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#FFFFFF", paddingHorizontal: 16 },
+  cashCancelText: { color: "#486876", fontSize: 11, fontWeight: "900" },
+  cashNotice: { borderRadius: 14, backgroundColor: "#E1F3FA", padding: 14, marginTop: 14 },
+  cashNoticeTitle: { color: "#245F7A", fontSize: 11, fontWeight: "900" },
+  cashNoticeText: { color: "#3D6F86", fontSize: 10, lineHeight: 16, marginTop: 4 },
   pixButtonStandalone: { marginTop: 12 },
   pixButtonText: { color: "#071D2D", fontSize: 11, fontWeight: "900" },
   pixButtonArrow: { color: "#071D2D", fontSize: 18, fontWeight: "900" },

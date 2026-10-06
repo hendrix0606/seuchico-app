@@ -31,7 +31,8 @@ type PaymentStatus =
   | "paid"
   | "failed"
   | "cancelled"
-  | "refunded";
+  | "refunded"
+  | "on_delivery";
 
 type Profile = {
   id: string;
@@ -47,7 +48,7 @@ type AdminOrder = {
   user_id: string;
   assigned_courier_id: string | null;
   status: OrderStatus;
-  payment_provider: "stripe" | "pix";
+  payment_provider: "stripe" | "pix" | "cash";
   payment_status: PaymentStatus;
   quantity: number;
   total_cents: number;
@@ -184,7 +185,7 @@ export default function AdminScreen() {
   };
 
   const handleTransition = async (order: AdminOrder) => {
-    const action = workflowAction(order.status);
+    const action = workflowAction(order);
     if (!action) return;
 
     if (action.nextStatus === "out_for_delivery" && !order.assigned_courier_id) {
@@ -360,7 +361,8 @@ export default function AdminScreen() {
               ? profilesById.get(order.assigned_courier_id)
               : null;
             const status = statusDetails(order.status);
-            const action = workflowAction(order.status);
+            const action = workflowAction(order);
+            const isCashPending = isCashOnDelivery(order);
             const isBusy = busyOrderId === order.id;
 
             return (
@@ -415,7 +417,7 @@ export default function AdminScreen() {
                     <Info label="CLIENTE" value={client?.full_name ?? order.delivery_recipient} />
                     <Info label="TELEFONE" value={client?.phone ?? order.delivery_phone} />
                     <Info label="QUANTIDADE" value={`${order.quantity} unidades`} />
-                    <Info label="PAGAMENTO" value={order.payment_provider === "pix" ? "PIX" : "Cartão · Stripe"} />
+                    <Info label="PAGAMENTO" value={paymentLabel(order)} />
                     <Info label="ENTREGA" value={formatAddress(order)} wide />
                     <Info label="ENTREGADOR" value={courier?.full_name ?? "Ainda não atribuído"} wide />
                   </View>
@@ -500,6 +502,25 @@ export default function AdminScreen() {
                         </>
                       ) : null}
                     </View>
+                  ) : order.status === "awaiting_payment" && isCashPending ? (
+                    <View style={styles.awaitingNotice}>
+                      <Text style={styles.awaitingTitle}>Dinheiro na entrega · aguardando seu aceite</Text>
+                      <Text style={styles.awaitingText}>
+                        O cliente vai pagar {formatCurrency(order.total_cents)} em dinheiro ao entregador. Ao aceitar, a produção começa antes do recebimento. O pagamento só entra na receita quando o entregador confirmar a entrega.
+                      </Text>
+                      {action ? (
+                        <Pressable
+                          accessibilityRole="button"
+                          disabled={isBusy}
+                          onPress={() => void handleTransition(order)}
+                          style={({ pressed }) => [styles.actionButton, isBusy && styles.disabled, pressed && styles.pressed]}
+                        >
+                          {isBusy ? <ActivityIndicator color="#071D2D" size="small" /> : null}
+                          <Text style={styles.actionButtonText}>{isBusy ? "Atualizando..." : action.label}</Text>
+                          {!isBusy ? <Text style={styles.actionArrow}>→</Text> : null}
+                        </Pressable>
+                      ) : null}
+                    </View>
                   ) : order.status === "awaiting_payment" ? (
                     <View style={styles.awaitingNotice}>
                       <Text style={styles.awaitingTitle}>Pagamento pendente</Text>
@@ -574,7 +595,24 @@ function countStatus(orders: AdminOrder[], status: OrderStatus) {
   return orders.filter((item) => item.status === status).length;
 }
 
-function workflowAction(status: OrderStatus) {
+function isCashOnDelivery(order: AdminOrder) {
+  return order.payment_provider === "cash" && order.payment_status === "on_delivery";
+}
+
+function paymentLabel(order: AdminOrder) {
+  if (order.payment_provider === "cash") {
+    return order.payment_status === "paid" ? "Dinheiro · recebido na entrega" : "Dinheiro na entrega · a receber";
+  }
+  return order.payment_provider === "pix" ? "PIX" : "Cartão · Stripe";
+}
+
+function workflowAction(order: AdminOrder) {
+  const status = order.status;
+  if (status === "awaiting_payment" && isCashOnDelivery(order)) {
+    return { label: "Aceitar pedido e iniciar produção", nextStatus: "in_production" as const };
+  }
+  // Pedido em dinheiro a receber: quem confirma entrega e recebimento e o entregador.
+  if (status === "out_for_delivery" && isCashOnDelivery(order)) return null;
   if (status === "paid") return { label: "Iniciar produção", nextStatus: "in_production" as const };
   if (status === "in_production") return { label: "Marcar como pronto para entrega", nextStatus: "ready_for_delivery" as const };
   if (status === "ready_for_delivery") return { label: "Registrar saída para entrega", nextStatus: "out_for_delivery" as const };
@@ -612,6 +650,7 @@ function formatDateTime(value: string) {
 function translateWorkflowError(message: string) {
   if (message.includes("COURIER_REQUIRED")) return "Atribua um entregador antes de iniciar a entrega.";
   if (message.includes("PAYMENT_REQUIRED")) return "A produção só pode começar depois da confirmação do pagamento.";
+  if (message.includes("CASH_RECEIPT_REQUIRED")) return "Em pedidos em dinheiro, o entregador confirma a entrega e o recebimento.";
   if (message.includes("INVALID_STATUS_TRANSITION")) return "Essa mudança não é permitida para o estado atual do pedido.";
   return "Não foi possível atualizar o pedido. Atualize o painel e tente novamente.";
 }

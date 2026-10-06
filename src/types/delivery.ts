@@ -36,6 +36,8 @@ export type DeliveryOrder = {
   assigned_courier_id: string | null;
   status: DeliveryOrderStatus;
   payment_status: string;
+  payment_provider?: string;
+  cash_change_for_cents?: number | null;
   quantity: number;
   total_cents: number;
   delivery_recipient: string;
