@@ -32,22 +32,31 @@ In the output, you'll find options to open the app in a
 
 You can start developing by editing the files inside the **src/app** directory. This project uses [file-based routing](https://docs.expo.dev/router/introduction).
 
-## Build nativo (EAS)
+## Build nativo (EAS) e APK
 
 O build na nuvem (EAS) usa apenas os arquivos do Git, então `.env` e `google-services.json`
-(ambos no `.gitignore`) precisam ser enviados como variáveis do EAS:
+(ambos no `.gitignore`) são enviados como variáveis do EAS. Perfis de `eas.json`:
+`development` (cliente de desenvolvimento), `preview` (**APK** para instalar direto) e
+`production` (AAB, para a Google Play).
+
+Antes do primeiro build, uma vez por ambiente (`development`, `preview` e `production`):
 
 1. Entre na conta Expo dona do projeto: `npx eas-cli login`.
-2. Cadastre as variáveis de ambiente do projeto no EAS (as mesmas do `.env`:
-   `EXPO_PUBLIC_SUPABASE_URL` e `EXPO_PUBLIC_SUPABASE_PUBLISHABLE_KEY`) para os ambientes
-   `development`, `preview` e `production`. Confira as opções do comando com
-   `npx eas-cli env:create --help`.
-3. Envie o `google-services.json` como variável do tipo **arquivo** com o nome
-   `GOOGLE_SERVICES_JSON` (o `app.config.js` já lê essa variável; sem ela, usa o arquivo local).
-4. Gere o build, por exemplo o de desenvolvimento para Android:
-   `npx eas-cli build --profile development --platform android`.
+2. Envie o `.env`: `npx eas-cli env:push preview --path .env`.
+3. Envie o `google-services.json` como variável de **arquivo**:
+   `npx eas-cli env:set preview --name GOOGLE_SERVICES_JSON --type file --value ./google-services.json --visibility sensitive`.
+4. Mapa do entregador: crie uma chave do **Maps SDK for Android** no Google Cloud, restrinja-a ao
+   pacote `com.henryq00.seuchico` e ao SHA-1 do build e cadastre-a:
+   `npx eas-cli env:set preview --name GOOGLE_MAPS_API_KEY --value <chave> --visibility sensitive`.
+   (O `app.config.js` só adiciona o plugin do mapa quando essa variável existe.)
+5. Notificações push: cadastre a chave de conta de serviço do Firebase (FCM V1) com
+   `npx eas-cli credentials`.
 
-O plugin `expo-location` exige um novo build nativo para a permissão de localização valer.
+Gerar o APK: `npx eas-cli build --profile preview --platform android`.
+
+No Supabase (Authentication → URL Configuration), libere os endereços de retorno do app
+(`seuchico://**` e `seuchicoapp://**`). O plugin `expo-location` exige um novo build nativo
+para a permissão de localização valer.
 
 ## Get a fresh project
 
