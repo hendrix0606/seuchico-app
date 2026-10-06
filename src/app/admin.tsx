@@ -13,9 +13,12 @@ import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { StarRating } from "../components/StarRating";
 import { visualShadows } from "../constants/visual-style";
 import {
+  fetchBlockedClients,
   fetchCashBalances,
   registerCashSettlement,
+  releaseCashBlock,
   translateSettlementError,
+  type BlockedClient,
   type CashBalance,
 } from "../lib/cash-settlement";
 import { formatMoneyInput, parseMoneyInput } from "../lib/finance";
@@ -128,6 +131,9 @@ export default function AdminScreen() {
   const [settleAmount, setSettleAmount] = useState("");
   const [settleNote, setSettleNote] = useState("");
   const [isSettling, setIsSettling] = useState(false);
+  const [blockedClients, setBlockedClients] = useState<BlockedClient[] | null>(null);
+  const [releaseConfirmId, setReleaseConfirmId] = useState<string | null>(null);
+  const [isReleasing, setIsReleasing] = useState(false);
 
   const loadDashboard = async ({ silent = false }: { silent?: boolean } = {}) => {
     if (!silent) setIsLoading(true);
@@ -166,8 +172,25 @@ export default function AdminScreen() {
 
     // Saldo do dinheiro com os entregadores: antes do SQL 019 so esconde o painel.
     setCashBalances(await fetchCashBalances());
+    setBlockedClients(await fetchBlockedClients());
 
     if (!silent) setIsLoading(false);
+  };
+
+  const handleReleaseBlock = async (clientId: string) => {
+    setIsReleasing(true);
+    setFeedback(null);
+
+    try {
+      await releaseCashBlock(clientId);
+      setReleaseConfirmId(null);
+      setFeedback({ tone: "success", text: "Cliente liberado para pagar em dinheiro novamente." });
+      setBlockedClients(await fetchBlockedClients());
+    } catch {
+      setFeedback({ tone: "error", text: "Não foi possível liberar o cliente. Confirme se o SQL da Etapa 20 foi executado." });
+    }
+
+    setIsReleasing(false);
   };
 
   const handleRegisterSettlement = async (courierId: string) => {
@@ -200,7 +223,6 @@ export default function AdminScreen() {
 
   useEffect(() => {
     void loadDashboard();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const couriers = useMemo(
@@ -452,6 +474,55 @@ export default function AdminScreen() {
               </View>
             );
           })}
+        </View>
+      ) : null}
+
+      {blockedClients && blockedClients.length > 0 ? (
+        <View style={styles.blockedPanel}>
+          <Text style={styles.blockedPanelEyebrow}>CLIENTES BLOQUEADOS PARA DINHEIRO</Text>
+          {blockedClients.map((item) => (
+            <View key={item.client_id} style={styles.blockedRow}>
+              <View style={styles.blockedInfo}>
+                <Text numberOfLines={1} style={styles.blockedName}>
+                  {item.client_name}{item.client_phone ? ` · ${item.client_phone}` : ""}
+                </Text>
+                <Text style={styles.blockedDetails}>
+                  Recusou em {formatDateTime(item.refused_at)} · bloqueado até {formatDateTime(item.blocked_until)}
+                </Text>
+                {item.refusal_note ? (
+                  <Text style={styles.blockedNote}>Motivo: {item.refusal_note}</Text>
+                ) : null}
+              </View>
+              {releaseConfirmId === item.client_id ? (
+                <View style={styles.blockedActions}>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isReleasing}
+                    onPress={() => setReleaseConfirmId(null)}
+                    style={({ pressed }) => [styles.blockedCancelButton, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.blockedCancelText}>Cancelar</Text>
+                  </Pressable>
+                  <Pressable
+                    accessibilityRole="button"
+                    disabled={isReleasing}
+                    onPress={() => void handleReleaseBlock(item.client_id)}
+                    style={({ pressed }) => [styles.blockedReleaseButton, isReleasing && styles.disabled, pressed && styles.pressed]}
+                  >
+                    <Text style={styles.blockedReleaseText}>{isReleasing ? "Liberando..." : "Confirmar liberação"}</Text>
+                  </Pressable>
+                </View>
+              ) : (
+                <Pressable
+                  accessibilityRole="button"
+                  onPress={() => setReleaseConfirmId(item.client_id)}
+                  style={({ pressed }) => [styles.blockedReleaseButton, pressed && styles.pressed]}
+                >
+                  <Text style={styles.blockedReleaseText}>Liberar</Text>
+                </Pressable>
+              )}
+            </View>
+          ))}
         </View>
       ) : null}
 
@@ -819,6 +890,18 @@ function translateWorkflowError(message: string) {
 }
 
 const styles = StyleSheet.create({
+  blockedPanel: { gap: 12, borderRadius: 18, borderWidth: 1, borderColor: "#F1D3CD", backgroundColor: "#FFF8F6", padding: 16, marginTop: 14 },
+  blockedPanelEyebrow: { color: "#A74435", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
+  blockedRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: 10 },
+  blockedInfo: { flexGrow: 1, flexBasis: 200, gap: 2 },
+  blockedName: { color: "#102A43", fontSize: 12, fontWeight: "900" },
+  blockedDetails: { color: "#627D8A", fontSize: 10 },
+  blockedNote: { color: "#8A5A52", fontSize: 10, lineHeight: 15 },
+  blockedActions: { flexDirection: "row", alignItems: "center", gap: 8 },
+  blockedReleaseButton: { minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 11, backgroundColor: "#A13B2C", paddingHorizontal: 13 },
+  blockedReleaseText: { color: "#FFFFFF", fontSize: 10, fontWeight: "900" },
+  blockedCancelButton: { minHeight: 38, alignItems: "center", justifyContent: "center", borderRadius: 11, borderWidth: 1, borderColor: "#D4E1E5", backgroundColor: "#FFFFFF", paddingHorizontal: 13 },
+  blockedCancelText: { color: "#486876", fontSize: 10, fontWeight: "900" },
   cashPanel: { gap: 10, borderRadius: 18, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 16, marginTop: 14 },
   cashPanelEyebrow: { color: "#087E83", fontSize: 8, fontWeight: "900", letterSpacing: 1.2 },
   cashRow: { gap: 10 },
