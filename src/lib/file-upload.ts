@@ -4,6 +4,7 @@ import { Platform } from "react-native";
 import { supabase } from "./supabase";
 
 const MAX_FILE_BYTES = 10 * 1024 * 1024;
+const MAX_AVATAR_BYTES = 5 * 1024 * 1024;
 
 export async function pickPaymentProof() {
   const result = await DocumentPicker.getDocumentAsync({
@@ -39,8 +40,25 @@ export async function pickBrandImage() {
   return asset;
 }
 
+export async function pickAvatarImage() {
+  const result = await DocumentPicker.getDocumentAsync({
+    copyToCacheDirectory: true,
+    multiple: false,
+    type: ["image/jpeg", "image/png", "image/webp"],
+  });
+
+  if (result.canceled) return null;
+  const asset = result.assets[0];
+
+  if (asset.size && asset.size > MAX_AVATAR_BYTES) {
+    throw new Error("FILE_TOO_LARGE");
+  }
+
+  return asset;
+}
+
 export async function uploadDocument(
-  bucket: "pix-proofs" | "brand-assets",
+  bucket: "pix-proofs" | "brand-assets" | "avatars",
   path: string,
   asset: { uri: string; name: string; mimeType?: string },
 ) {

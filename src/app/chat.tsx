@@ -12,9 +12,11 @@ import {
   TextInput,
   View,
 } from "react-native";
+import { Avatar } from "../components/Avatar";
 import { ProtectedRoleScreen } from "../components/ProtectedRoleScreen";
 import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
+import { fetchOrderClientAvatarPath } from "../lib/avatar";
 import { notifyOrderEvent } from "../lib/push-notifications";
 import { supabase } from "../lib/supabase";
 import type { ChatOrder, OrderMessage } from "../types/chat";
@@ -33,6 +35,7 @@ export default function ChatScreen() {
   const [isLoading, setIsLoading] = useState(true);
   const [isSending, setIsSending] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [clientAvatarPath, setClientAvatarPath] = useState<string | null>(null);
   const scrollRef = useRef<ElementRef<typeof ScrollView>>(null);
 
   useEffect(() => {
@@ -111,6 +114,9 @@ export default function ChatScreen() {
       }
 
       setOrder(loadedOrder);
+      void fetchOrderClientAvatarPath(loadedOrder.id).then((path) => {
+        if (isMounted) setClientAvatarPath(path);
+      });
       await loadMessages();
       if (isMounted) setIsLoading(false);
     };
@@ -250,28 +256,37 @@ export default function ChatScreen() {
                       isOwn ? styles.messageRowOwn : styles.messageRowOther,
                     ]}
                   >
-                    <View
-                      style={[
-                        styles.messageBubble,
-                        isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
-                      ]}
-                    >
-                      <Text
-                        style={isOwn ? styles.senderNameOwn : styles.senderName}
+                    <View style={[styles.messageLine, isOwn && styles.messageLineOwn]}>
+                      {message.sender_role === "client" ? (
+                        <Avatar
+                          name={message.sender_name}
+                          path={clientAvatarPath}
+                          size={32}
+                        />
+                      ) : null}
+                      <View
+                        style={[
+                          styles.messageBubble,
+                          isOwn ? styles.messageBubbleOwn : styles.messageBubbleOther,
+                        ]}
                       >
-                        {isOwn ? "Você" : message.sender_name}
-                      </Text>
-                      <Text
-                        style={isOwn ? styles.messageBodyOwn : styles.messageBody}
-                      >
-                        {message.body}
-                      </Text>
-                      <Text
-                        style={isOwn ? styles.messageMetaOwn : styles.messageMeta}
-                      >
-                        {formatMessageTime(message.created_at)}
-                        {isOwn ? (message.read_at ? " · Lida" : " · Enviada") : ""}
-                      </Text>
+                        <Text
+                          style={isOwn ? styles.senderNameOwn : styles.senderName}
+                        >
+                          {isOwn ? "Você" : message.sender_name}
+                        </Text>
+                        <Text
+                          style={isOwn ? styles.messageBodyOwn : styles.messageBody}
+                        >
+                          {message.body}
+                        </Text>
+                        <Text
+                          style={isOwn ? styles.messageMetaOwn : styles.messageMeta}
+                        >
+                          {formatMessageTime(message.created_at)}
+                          {isOwn ? (message.read_at ? " · Lida" : " · Enviada") : ""}
+                        </Text>
+                      </View>
                     </View>
                   </View>
                 );
@@ -347,7 +362,9 @@ const styles = StyleSheet.create({
   messageRow: { width: "100%" },
   messageRowOwn: { alignItems: "flex-end" },
   messageRowOther: { alignItems: "flex-start" },
-  messageBubble: { maxWidth: "82%", borderRadius: 17, paddingHorizontal: 14, paddingVertical: 11 },
+  messageLine: { maxWidth: "88%", flexDirection: "row", alignItems: "flex-end", gap: 8 },
+  messageLineOwn: { flexDirection: "row-reverse" },
+  messageBubble: { flexShrink: 1, borderRadius: 17, paddingHorizontal: 14, paddingVertical: 11 },
   messageBubbleOwn: { borderBottomRightRadius: 5, backgroundColor: "#087E83" },
   messageBubbleOther: { borderBottomLeftRadius: 5, backgroundColor: "#FFFFFF", borderWidth: 1, borderColor: "#DCE7EA" },
   senderName: { color: "#087E83", fontSize: 9, fontWeight: "900", marginBottom: 4 },
