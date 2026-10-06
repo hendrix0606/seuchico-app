@@ -265,7 +265,9 @@ export default function OrdersScreen() {
     setPaymentMessage(null);
 
     try {
-      const returnUrl = Linking.createURL("/pedidos");
+      // O esquema precisa ser o aceito pela funcao create-stripe-checkout
+      // (seuchico:); sem ele, o APK usaria o primeiro esquema do app.json.
+      const returnUrl = Linking.createURL("/pedidos", { scheme: "seuchico" });
       const { data, error } = await supabase.functions.invoke(
         "create-stripe-checkout",
         {
