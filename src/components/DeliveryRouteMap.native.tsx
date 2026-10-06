@@ -1,15 +1,23 @@
 import { useEffect, useRef } from "react";
 import { StyleSheet, View } from "react-native";
 import MapView, { Marker, Polyline } from "react-native-maps";
-import type { Coordinate, DeliveryRoute } from "../types/delivery";
+import {
+  DeliveryRoutePanel,
+  type DeliveryRouteMapProps,
+} from "./DeliveryRoutePanel";
 
-type DeliveryRouteMapProps = {
-  currentLocation: Coordinate;
-  onOpenExternal?: () => void;
-  route: DeliveryRoute | null;
-};
+// O mapa interno usa o Google Maps e exige uma chave de API (Google Cloud com
+// faturamento). Por padrao ele fica DESLIGADO e o app usa o painel de rota, que
+// abre o mapa real pelo botao. Para ligar: defina EXPO_PUBLIC_NATIVE_MAP=true e
+// GOOGLE_MAPS_API_KEY no EAS (veja o README) e gere um novo build.
+const USE_NATIVE_MAP = process.env.EXPO_PUBLIC_NATIVE_MAP === "true";
 
-export function DeliveryRouteMap({
+export function DeliveryRouteMap(props: DeliveryRouteMapProps) {
+  if (!USE_NATIVE_MAP) return <DeliveryRoutePanel {...props} />;
+  return <GoogleRouteMap {...props} />;
+}
+
+function GoogleRouteMap({
   currentLocation,
   route,
 }: DeliveryRouteMapProps) {

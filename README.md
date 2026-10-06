@@ -45,12 +45,15 @@ Antes do primeiro build, uma vez por ambiente (`development`, `preview` e `produ
 2. Envie o `.env`: `npx eas-cli env:push preview --path .env`.
 3. Envie o `google-services.json` como variável de **arquivo**:
    `npx eas-cli env:set preview --name GOOGLE_SERVICES_JSON --type file --value ./google-services.json --visibility sensitive`.
-4. Mapa do entregador: crie uma chave do **Maps SDK for Android** no Google Cloud, restrinja-a ao
-   pacote `com.henryq00.seuchico` e ao SHA-1 do build e cadastre-a:
-   `npx eas-cli env:set preview --name GOOGLE_MAPS_API_KEY --value <chave> --visibility sensitive`.
-   (O `app.config.js` só adiciona o plugin do mapa quando essa variável existe.)
-5. Notificações push: cadastre a chave de conta de serviço do Firebase (FCM V1) com
+4. Notificações push: cadastre a chave de conta de serviço do Firebase (FCM V1) com
    `npx eas-cli credentials`.
+
+**Mapa interno (opcional).** Por padrão o app **não** usa mapa interno: entregador e cliente veem
+distância, previsão e um botão que abre o trajeto no Google Maps do aparelho (não precisa de chave
+nem de Google Cloud). Para ligar o mapa interno, crie uma chave do *Maps SDK for Android*
+(exige conta com faturamento), restrinja-a ao pacote `com.henryq00.seuchico` e ao SHA-1 do build, e
+cadastre `GOOGLE_MAPS_API_KEY` e `EXPO_PUBLIC_NATIVE_MAP=true` no EAS
+(`npx eas-cli env:set preview --name <NOME> --value <valor> --visibility sensitive`).
 
 Gerar o APK: `npx eas-cli build --profile preview --platform android`.
 
