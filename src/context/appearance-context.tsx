@@ -47,7 +47,6 @@ export function AppearanceProvider({ children }: PropsWithChildren) {
   const value = useMemo(
     () => ({ appearance, isAppearanceLoading, refreshAppearance }),
     // refreshAppearance sempre usa o cliente atual do Supabase.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
     [appearance, isAppearanceLoading],
   );
 
