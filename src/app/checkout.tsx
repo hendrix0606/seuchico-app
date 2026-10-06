@@ -17,6 +17,7 @@ import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
 import { formatCurrency, formatDatabaseDate } from "../lib/tickets";
 import { supabase } from "../lib/supabase";
+import { detectCurrentAddress, locationErrorMessage } from "../lib/user-location";
 
 type CheckoutDraft = {
   id: string;
@@ -58,6 +59,49 @@ export default function CheckoutScreen() {
   const [isSubmitting, setIsSubmitting] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [formMessage, setFormMessage] = useState<string | null>(null);
+  const [isLocating, setIsLocating] = useState(false);
+  const [locationMessage, setLocationMessage] = useState<{
+    tone: "success" | "error";
+    text: string;
+  } | null>(null);
+
+  const handleUseLocation = async () => {
+    if (isLocating) return;
+
+    setIsLocating(true);
+    setLocationMessage(null);
+
+    try {
+      const address = await detectCurrentAddress();
+
+      if (address.zipCode) setZipCode(formatZipCode(address.zipCode));
+      if (address.street) setStreet(address.street);
+      if (address.number) setNumber(address.number);
+      if (address.neighborhood) setNeighborhood(address.neighborhood);
+      if (address.city) setCity(address.city);
+      if (address.state) setState(address.state);
+
+      const missing = [
+        !address.zipCode && "CEP",
+        !address.street && "rua",
+        !address.number && "número",
+        !address.neighborhood && "bairro",
+        !address.city && "cidade",
+        !address.state && "UF",
+      ].filter(Boolean);
+
+      setLocationMessage({
+        tone: "success",
+        text: missing.length
+          ? `Endereço preenchido. Complete: ${missing.join(", ")}.`
+          : "Endereço preenchido. Confira os dados antes de confirmar.",
+      });
+    } catch (error) {
+      setLocationMessage({ tone: "error", text: locationErrorMessage(error) });
+    } finally {
+      setIsLocating(false);
+    }
+  };
 
   useEffect(() => {
     if (!profile) return;
@@ -263,6 +307,34 @@ export default function CheckoutScreen() {
             <View style={styles.formCard}>
               <Text style={styles.cardEyebrow}>ENDEREÇO DE ENTREGA</Text>
               <Text style={styles.cardTitle}>Quem receberá o pedido?</Text>
+
+              {Platform.OS !== "web" ? (
+                <View style={styles.locationBox}>
+                  <TouchableOpacity
+                    accessibilityRole="button"
+                    activeOpacity={0.72}
+                    disabled={isLocating}
+                    onPress={() => void handleUseLocation()}
+                    style={[styles.locationButton, isLocating && styles.disabled]}
+                  >
+                    {isLocating ? <ActivityIndicator color="#087E83" size="small" /> : null}
+                    <Text style={styles.locationButtonText}>
+                      {isLocating ? "Buscando localização..." : "📍 Usar minha localização"}
+                    </Text>
+                  </TouchableOpacity>
+                  <Text style={styles.locationHint}>
+                    Usamos sua localização uma única vez, só para preencher o endereço abaixo. Ela não é guardada, e você confere tudo antes de confirmar.
+                  </Text>
+                  {locationMessage ? (
+                    <Text
+                      accessibilityLiveRegion="polite"
+                      style={locationMessage.tone === "success" ? styles.locationSuccess : styles.locationError}
+                    >
+                      {locationMessage.text}
+                    </Text>
+                  ) : null}
+                </View>
+              ) : null}
 
               <InputField
                 label="Nome do destinatário *"
@@ -509,6 +581,12 @@ const styles = StyleSheet.create({
   },
   cardEyebrow: { color: "#087E83", fontSize: 9, fontWeight: "900", letterSpacing: 1.4 },
   cardTitle: { color: "#102A43", fontSize: 21, fontWeight: "900", marginBottom: 4 },
+  locationBox: { gap: 8, borderRadius: 16, borderWidth: 1, borderColor: "#CFE8E8", backgroundColor: "#F3FBFB", padding: 14 },
+  locationButton: { minHeight: 46, flexDirection: "row", alignItems: "center", justifyContent: "center", gap: 9, borderRadius: 13, borderWidth: 1, borderColor: "#087E83", backgroundColor: "#FFFFFF", paddingHorizontal: 14 },
+  locationButtonText: { color: "#087E83", fontSize: 12, fontWeight: "900" },
+  locationHint: { color: "#627D8A", fontSize: 10, lineHeight: 16 },
+  locationSuccess: { color: "#176A50", fontSize: 11, lineHeight: 17, fontWeight: "800" },
+  locationError: { color: "#8A3325", fontSize: 11, lineHeight: 17, fontWeight: "800" },
   fieldGroup: { gap: 8 },
   label: { color: "#102A43", fontSize: 12, fontWeight: "900" },
   input: {

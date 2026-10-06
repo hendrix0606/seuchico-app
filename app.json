@@ -40,7 +40,13 @@
         }
       ],
       "expo-notifications",
-      "expo-image"
+      "expo-image",
+      [
+        "expo-location",
+        {
+          "locationWhenInUsePermission": "O SeuChico usa sua localização para preencher o endereço de entrega e, para entregadores, para compartilhar a posição durante uma entrega."
+        }
+      ]
     ],
     "experiments": {
       "typedRoutes": true,
