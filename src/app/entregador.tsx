@@ -556,12 +556,24 @@ export default function CourierScreen() {
               )}
             </View>
           ) : selectedOrder.status === "ready_for_delivery" ? (
-            <View style={styles.noticeCard}>
-              <Text style={styles.noticeTitle}>Aguardando saída para entrega</Text>
-              <Text style={styles.noticeText}>
-                O administrador precisa registrar a saída antes que o GPS possa ser compartilhado.
-              </Text>
-            </View>
+            <>
+              {isCashToCollect(selectedOrder) ? (
+                <View style={styles.cashCard}>
+                  <Text style={styles.cashCardTitle}>
+                    Receber {formatCurrency(selectedOrder.total_cents)} em dinheiro
+                  </Text>
+                  <Text style={styles.cashCardText}>
+                    {cashChangeInstruction(selectedOrder)}
+                  </Text>
+                </View>
+              ) : null}
+              <View style={styles.noticeCard}>
+                <Text style={styles.noticeTitle}>Aguardando saída para entrega</Text>
+                <Text style={styles.noticeText}>
+                  O administrador precisa registrar a saída antes que o GPS possa ser compartilhado.
+                </Text>
+              </View>
+            </>
           ) : (
             <View style={styles.deliveredCard}>
               <Text style={styles.deliveredTitle}>✓ Entrega concluída</Text>
