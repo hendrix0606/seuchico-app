@@ -280,7 +280,7 @@ export default function OrdersScreen() {
 
       if (error) {
         setPaymentError(
-          "Não foi possível abrir o pagamento. Confirme a configuração da função Stripe no Supabase.",
+          translateCheckoutError(await readFunctionErrorCode(error)),
         );
         return;
       }
@@ -730,6 +730,36 @@ function InfoItem({ label, value, strong = false, wide = false }: { label: strin
       </Text>
     </View>
   );
+}
+
+// Quando a Edge Function responde com erro HTTP, o supabase-js devolve a
+// resposta em error.context; o codigo do erro vem no corpo JSON ({ error }).
+async function readFunctionErrorCode(error: unknown) {
+  const context = (error as { context?: unknown } | null)?.context;
+
+  if (context && typeof (context as Response).json === "function") {
+    try {
+      const body = await (context as Response).json();
+      return typeof body?.error === "string" ? (body.error as string) : null;
+    } catch {
+      return null;
+    }
+  }
+
+  return null;
+}
+
+function translateCheckoutError(code: string | null) {
+  const suffix = code ? ` (código: ${code})` : "";
+
+  if (code === "SERVER_NOT_CONFIGURED") return `O pagamento por cartão não está configurado no servidor (faltam chaves do Stripe).${suffix}`;
+  if (code === "INVALID_RETURN_URL") return `O servidor não aceitou o endereço de retorno do aplicativo.${suffix}`;
+  if (code === "CHECKOUT_CREATION_FAILED") return `O Stripe não conseguiu criar o pagamento. Veja o log da função create-stripe-checkout no Supabase.${suffix}`;
+  if (code === "PAYMENT_ALREADY_STARTING") return `Já existe um pagamento sendo iniciado para este pedido. Aguarde alguns segundos e tente de novo.${suffix}`;
+  if (code === "ORDER_CANNOT_BE_PAID") return `Este pedido não pode mais ser pago.${suffix}`;
+  if (code === "INVALID_SESSION" || code === "AUTH_REQUIRED") return `Sua sessão expirou. Saia e entre novamente.${suffix}`;
+
+  return `Não foi possível abrir o pagamento. Confirme a configuração da função Stripe no Supabase.${suffix}`;
 }
 
 function cashChangeText(order: OrderListItem) {
