@@ -184,6 +184,12 @@ Deno.serve(async (request) => {
       });
     }
 
+    // Enderecos de app (seuchico:// e exp://) passam pela ponte HTTPS
+    // stripe-return, que redireciona de volta para o aplicativo.
+    const stripeReturnUrl = ["http:", "https:"].includes(new URL(returnUrl).protocol)
+      ? returnUrl
+      : `${supabaseUrl}/functions/v1/stripe-return?to=${encodeURIComponent(returnUrl)}`;
+
     const metadata = {
       order_id: order.id,
       order_number: String(order.order_number),
@@ -199,10 +205,10 @@ Deno.serve(async (request) => {
         metadata,
         payment_intent_data: { metadata },
         success_url: appendQuery(
-          returnUrl,
+          stripeReturnUrl,
           "payment=success&session_id={CHECKOUT_SESSION_ID}",
         ),
-        cancel_url: appendQuery(returnUrl, "payment=cancelled"),
+        cancel_url: appendQuery(stripeReturnUrl, "payment=cancelled"),
       },
       { idempotencyKey: `seuchico:${order.id}:${nextAttempt}` },
     );
