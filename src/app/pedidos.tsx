@@ -280,7 +280,7 @@ export default function OrdersScreen() {
 
       if (error) {
         setPaymentError(
-          translateCheckoutError(await readFunctionErrorCode(error)),
+          translateCheckoutError(await readFunctionError(error)),
         );
         return;
       }
@@ -732,25 +732,43 @@ function InfoItem({ label, value, strong = false, wide = false }: { label: strin
   );
 }
 
+type FunctionErrorInfo = { code: string | null; detail: string };
+
 // Quando a Edge Function responde com erro HTTP, o supabase-js devolve a
 // resposta em error.context; o codigo do erro vem no corpo JSON ({ error }).
-async function readFunctionErrorCode(error: unknown) {
-  const context = (error as { context?: unknown } | null)?.context;
+// Em falhas de rede ou do gateway do Supabase nao ha esse campo, entao tambem
+// reunimos o tipo do erro, o status e a mensagem para o diagnostico.
+async function readFunctionError(error: unknown): Promise<FunctionErrorInfo> {
+  const err = error as { name?: string; message?: string; context?: unknown } | null;
+  const parts: string[] = [];
+  let code: string | null = null;
 
-  if (context && typeof (context as Response).json === "function") {
+  if (err?.name) parts.push(err.name);
+
+  const context = err?.context as (Response & { status?: number }) | undefined;
+  if (context && typeof context.status === "number") parts.push(`status ${context.status}`);
+
+  if (context && typeof context.json === "function") {
     try {
-      const body = await (context as Response).json();
-      return typeof body?.error === "string" ? (body.error as string) : null;
+      const body = await context.json();
+      if (typeof body?.error === "string") {
+        code = body.error;
+      } else {
+        const text = body?.message ?? body?.msg ?? body?.error_description ?? body?.code;
+        if (text) parts.push(String(text).slice(0, 120));
+      }
     } catch {
-      return null;
+      parts.push("resposta sem JSON");
     }
+  } else if (err?.message) {
+    parts.push(err.message.slice(0, 120));
   }
 
-  return null;
+  return { code, detail: parts.join(" · ") };
 }
 
-function translateCheckoutError(code: string | null) {
-  const suffix = code ? ` (código: ${code})` : "";
+function translateCheckoutError({ code, detail }: FunctionErrorInfo) {
+  const suffix = code ? ` (código: ${code})` : detail ? ` [${detail}]` : "";
 
   if (code === "SERVER_NOT_CONFIGURED") return `O pagamento por cartão não está configurado no servidor (faltam chaves do Stripe).${suffix}`;
   if (code === "INVALID_RETURN_URL") return `O servidor não aceitou o endereço de retorno do aplicativo.${suffix}`;
