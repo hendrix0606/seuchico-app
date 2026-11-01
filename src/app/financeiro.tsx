@@ -189,7 +189,6 @@ export default function FinancialScreen() {
 
   useEffect(() => {
     void loadFinancialData();
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const startDate = useMemo(() => periodStart(period), [period]);

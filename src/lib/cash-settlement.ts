@@ -44,6 +44,31 @@ export async function reportCashRefusal(orderId: string, note: string) {
   if (error) throw error;
 }
 
+export type BlockedClient = {
+  client_id: string;
+  client_name: string;
+  client_phone: string | null;
+  refused_at: string;
+  refusal_note: string | null;
+  blocked_until: string;
+};
+
+// Antes do SQL 020 a funcao nao existe: devolve null e o painel fica escondido.
+export async function fetchBlockedClients() {
+  const { data, error } = await supabase.rpc("admin_cash_blocked_clients");
+  if (error) return null;
+  return (data ?? []) as BlockedClient[];
+}
+
+export async function releaseCashBlock(clientId: string) {
+  const { error } = await supabase.rpc("admin_release_cash_block", {
+    p_client_id: clientId,
+    p_note: null,
+  });
+
+  if (error) throw error;
+}
+
 export function translateSettlementError(message: string) {
   if (message.includes("AMOUNT_EXCEEDS_BALANCE")) return "O valor é maior que o saldo a repassar deste entregador.";
   if (message.includes("INVALID_AMOUNT")) return "Informe um valor maior que zero.";

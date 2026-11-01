@@ -140,7 +140,6 @@ export default function CourierScreen() {
     setMessage(null);
     setShowDeliveryConfirmation(false);
     // A troca de pedido precisa interromper o rastreamento anterior.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [selectedOrderId]);
 
   const refreshRoute = async (order: DeliveryOrder, origin: Coordinate) => {
