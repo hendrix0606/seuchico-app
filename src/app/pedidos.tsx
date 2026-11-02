@@ -268,9 +268,23 @@ export default function OrdersScreen() {
       // O esquema precisa ser o aceito pela funcao create-stripe-checkout
       // (seuchico:); sem ele, o APK usaria o primeiro esquema do app.json.
       const returnUrl = Linking.createURL("/pedidos", { scheme: "seuchico" });
+
+      // No celular a sessão guardada pode estar vencida; renova antes de chamar
+      // a função, que valida o token do cliente no servidor.
+      const { data: refreshed, error: refreshError } =
+        await supabase.auth.refreshSession();
+
+      if (refreshError || !refreshed.session) {
+        setPaymentError(
+          "Sua sessão expirou. Saia do aplicativo, entre de novo e tente pagar outra vez.",
+        );
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke(
         "create-stripe-checkout",
         {
+          headers: { Authorization: `Bearer ${refreshed.session.access_token}` },
           body: {
             order_id: orderId,
             return_url: returnUrl,
