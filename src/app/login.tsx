@@ -13,7 +13,7 @@ import {
 } from "react-native";
 import { supabase } from "../lib/supabase";
 import type { UserRole } from "../context/auth-context";
-import { BrandMark } from "../components/BrandMark";
+import { BrandMark, useHasCustomLogo } from "../components/BrandMark";
 import { visualShadows } from "../constants/visual-style";
 import { routeForRole } from "../lib/role-routes";
 
@@ -21,6 +21,7 @@ type Feedback = { tone: "error" | "info"; text: string } | null;
 
 export default function LoginScreen() {
   const router = useRouter();
+  const hasCustomLogo = useHasCustomLogo();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -96,11 +97,13 @@ export default function LoginScreen() {
           </Pressable>
 
           <View style={styles.brand}>
-            <BrandMark size={43} />
-            <View>
-              <Text style={styles.brandName}>SeuChico</Text>
-              <Text style={styles.brandTagline}>INGRESSOS PERSONALIZADOS</Text>
-            </View>
+            <BrandMark size={hasCustomLogo ? 43 : 66} />
+            {hasCustomLogo ? (
+              <View>
+                <Text style={styles.brandName}>SeuChico</Text>
+                <Text style={styles.brandTagline}>INGRESSOS PERSONALIZADOS</Text>
+              </View>
+            ) : null}
           </View>
 
           <View style={styles.heading}>
