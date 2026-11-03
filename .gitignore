@@ -50,3 +50,11 @@ example
 /ios
 /android
 .claude/launch.json
+
+# chaves privadas de conta de servico (Firebase/Google): nunca versionar
+*-firebase-adminsdk-*.json
+firebase-adminsdk*.json
+service-account*.json
+
+# Supabase CLI (estado local)
+supabase/.temp/

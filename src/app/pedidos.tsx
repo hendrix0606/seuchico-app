@@ -83,6 +83,7 @@ export default function OrdersScreen() {
   const [isPayingOrderId, setIsPayingOrderId] = useState<string | null>(null);
   const [isPixEnabled, setIsPixEnabled] = useState(false);
   const [cashSettings, setCashSettings] = useState<{ is_enabled: boolean; max_order_cents: number } | null>(null);
+  const [cashBlockedUntil, setCashBlockedUntil] = useState<string | null>(null);
   const [cashFormOrderId, setCashFormOrderId] = useState<string | null>(null);
   const [cashChangeInput, setCashChangeInput] = useState("");
   const [isChoosingCash, setIsChoosingCash] = useState(false);
@@ -164,6 +165,11 @@ export default function OrdersScreen() {
       .eq("id", 1)
       .maybeSingle();
     setCashSettings(cashData ?? null);
+
+    // Bloqueio por recusa anterior. Se o SQL 021 ainda nao foi executado a
+    // chamada falha e o botao continua visivel; o servidor segue barrando.
+    const { data: blockedUntil } = await supabase.rpc("my_cash_block_until");
+    setCashBlockedUntil(typeof blockedUntil === "string" ? blockedUntil : null);
 
     if (!silent) setIsLoading(false);
   };
@@ -265,10 +271,26 @@ export default function OrdersScreen() {
     setPaymentMessage(null);
 
     try {
-      const returnUrl = Linking.createURL("/pedidos");
+      // O esquema precisa ser o aceito pela funcao create-stripe-checkout
+      // (seuchico:); sem ele, o APK usaria o primeiro esquema do app.json.
+      const returnUrl = Linking.createURL("/pedidos", { scheme: "seuchico" });
+
+      // No celular a sessão guardada pode estar vencida; renova antes de chamar
+      // a função, que valida o token do cliente no servidor.
+      const { data: refreshed, error: refreshError } =
+        await supabase.auth.refreshSession();
+
+      if (refreshError || !refreshed.session) {
+        setPaymentError(
+          "Sua sessão expirou. Saia do aplicativo, entre de novo e tente pagar outra vez.",
+        );
+        return;
+      }
+
       const { data, error } = await supabase.functions.invoke(
         "create-stripe-checkout",
         {
+          headers: { Authorization: `Bearer ${refreshed.session.access_token}` },
           body: {
             order_id: orderId,
             return_url: returnUrl,
@@ -278,7 +300,7 @@ export default function OrdersScreen() {
 
       if (error) {
         setPaymentError(
-          "Não foi possível abrir o pagamento. Confirme a configuração da função Stripe no Supabase.",
+          translateCheckoutError(await readFunctionError(error)),
         );
         return;
       }
@@ -403,6 +425,7 @@ export default function OrdersScreen() {
             const pixSubmission = firstSubmission(order.pix_payment_submissions);
             const canChooseCash =
               Boolean(cashSettings?.is_enabled) &&
+              !cashBlockedUntil &&
               order.total_cents <= (cashSettings?.max_order_cents ?? 0) &&
               pixSubmission?.status !== "pending";
 
@@ -474,6 +497,9 @@ export default function OrdersScreen() {
                               ? pixSubmission.admin_note || "Revise o pagamento e envie um novo comprovante."
                               : "Escolha PIX com comprovante, cartão pela página oficial do Stripe" +
                                 (canChooseCash ? " ou pague em dinheiro na entrega." : ".")}
+                        {cashBlockedUntil && cashSettings?.is_enabled && !isCashPending
+                          ? ` Dinheiro na entrega indisponível até ${formatCreatedAt(cashBlockedUntil)}, por uma recusa de pagamento anterior.`
+                          : ""}
                       </Text>
                       {pixSubmission?.status === "pending" ? (
                         <Pressable
@@ -728,6 +754,54 @@ function InfoItem({ label, value, strong = false, wide = false }: { label: strin
       </Text>
     </View>
   );
+}
+
+type FunctionErrorInfo = { code: string | null; detail: string };
+
+// Quando a Edge Function responde com erro HTTP, o supabase-js devolve a
+// resposta em error.context; o codigo do erro vem no corpo JSON ({ error }).
+// Em falhas de rede ou do gateway do Supabase nao ha esse campo, entao tambem
+// reunimos o tipo do erro, o status e a mensagem para o diagnostico.
+async function readFunctionError(error: unknown): Promise<FunctionErrorInfo> {
+  const err = error as { name?: string; message?: string; context?: unknown } | null;
+  const parts: string[] = [];
+  let code: string | null = null;
+
+  if (err?.name) parts.push(err.name);
+
+  const context = err?.context as (Response & { status?: number }) | undefined;
+  if (context && typeof context.status === "number") parts.push(`status ${context.status}`);
+
+  if (context && typeof context.json === "function") {
+    try {
+      const body = await context.json();
+      if (typeof body?.error === "string") {
+        code = body.error;
+      } else {
+        const text = body?.message ?? body?.msg ?? body?.error_description ?? body?.code;
+        if (text) parts.push(String(text).slice(0, 120));
+      }
+    } catch {
+      parts.push("resposta sem JSON");
+    }
+  } else if (err?.message) {
+    parts.push(err.message.slice(0, 120));
+  }
+
+  return { code, detail: parts.join(" · ") };
+}
+
+function translateCheckoutError({ code, detail }: FunctionErrorInfo) {
+  const suffix = code ? ` (código: ${code})` : detail ? ` [${detail}]` : "";
+
+  if (code === "SERVER_NOT_CONFIGURED") return `O pagamento por cartão não está configurado no servidor (faltam chaves do Stripe).${suffix}`;
+  if (code === "INVALID_RETURN_URL") return `O servidor não aceitou o endereço de retorno do aplicativo.${suffix}`;
+  if (code === "CHECKOUT_CREATION_FAILED") return `O Stripe não conseguiu criar o pagamento. Veja o log da função create-stripe-checkout no Supabase.${suffix}`;
+  if (code === "PAYMENT_ALREADY_STARTING") return `Já existe um pagamento sendo iniciado para este pedido. Aguarde alguns segundos e tente de novo.${suffix}`;
+  if (code === "ORDER_CANNOT_BE_PAID") return `Este pedido não pode mais ser pago.${suffix}`;
+  if (code === "INVALID_SESSION" || code === "AUTH_REQUIRED") return `Sua sessão expirou. Saia e entre novamente.${suffix}`;
+
+  return `Não foi possível abrir o pagamento. Confirme a configuração da função Stripe no Supabase.${suffix}`;
 }
 
 function cashChangeText(order: OrderListItem) {
