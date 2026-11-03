@@ -10,6 +10,7 @@ import {
   Text,
   View,
 } from "react-native";
+import { BrandLogo } from "../components/BrandMark";
 import { useAppearance } from "../context/appearance-context";
 import { visualShadows } from "../constants/visual-style";
 import { useAuth } from "../context/auth-context";
@@ -74,26 +75,28 @@ export default function HomeScreen() {
         <View style={styles.page}>
           <View style={styles.header}>
             <View style={styles.brandRow}>
-              <View style={[styles.brandIcon, { backgroundColor: appearance.primary_color }]}>
-                {appearance.logo_url ? (
-                  <Image
-                    resizeMode="contain"
-                    source={{ uri: appearance.logo_url }}
-                    style={styles.brandLogo}
-                  />
-                ) : (
-                  <Text style={[styles.brandIconText, { color: appearance.accent_color }]}>SC</Text>
-                )}
-              </View>
+              {appearance.logo_url ? (
+                <>
+                  <View style={[styles.brandIcon, { backgroundColor: appearance.primary_color }]}>
+                    <Image
+                      resizeMode="contain"
+                      source={{ uri: appearance.logo_url }}
+                      style={styles.brandLogo}
+                    />
+                  </View>
 
-              <View>
-                <Text style={[styles.brandName, { color: appearance.primary_color }]}>
-                  {appearance.brand_name}
-                </Text>
-                <Text style={[styles.brandTagline, { color: appearance.secondary_color }]}>
-                  {appearance.tagline}
-                </Text>
-              </View>
+                  <View>
+                    <Text style={[styles.brandName, { color: appearance.primary_color }]}>
+                      {appearance.brand_name}
+                    </Text>
+                    <Text style={[styles.brandTagline, { color: appearance.secondary_color }]}>
+                      {appearance.tagline}
+                    </Text>
+                  </View>
+                </>
+              ) : (
+                <BrandLogo height={84} />
+              )}
             </View>
 
             <Pressable

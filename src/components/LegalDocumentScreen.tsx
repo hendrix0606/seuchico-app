@@ -3,7 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import type { ReactNode } from "react";
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { visualShadows } from "../constants/visual-style";
-import { BrandMark } from "./BrandMark";
+import { BrandMark, useHasCustomLogo } from "./BrandMark";
 
 export type LegalSection = {
   title: string;
@@ -20,6 +20,7 @@ export function LegalDocumentScreen({
   sections: LegalSection[];
 }) {
   const router = useRouter();
+  const hasCustomLogo = useHasCustomLogo();
 
   return (
     <View style={styles.screen}>
@@ -30,7 +31,10 @@ export function LegalDocumentScreen({
             <Pressable accessibilityRole="button" onPress={() => router.back()} style={({ pressed }) => [styles.backButton, pressed && styles.pressed]}>
               <Text style={styles.backButtonText}>← Voltar</Text>
             </Pressable>
-            <View style={styles.brand}><BrandMark size={39} /><Text style={styles.brandName}>SeuChico</Text></View>
+            <View style={styles.brand}>
+              <BrandMark size={39} />
+              {hasCustomLogo ? <Text style={styles.brandName}>SeuChico</Text> : null}
+            </View>
           </View>
 
           <View style={styles.hero}>
